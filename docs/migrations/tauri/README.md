@@ -26,6 +26,18 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   o atalho antigo que abria só o Vite) e remove o risco de loop no
   `beforeDevCommand` do `tauri.conf.json`. PR estritamente
   organizacional — nenhuma feature nova, nenhuma alteração de UI.
+- [PR 005 — Eventos reais via Tauri event system](./STATUS_MIGRATION_TAURI_PR_005_EVENTS.md)
+  Cria a base real do barramento de eventos do FluxoraV1: módulo
+  Rust `events.rs` com `FluxoraEvent` + ring buffer, canal único
+  `fluxora-event` consumido pelo frontend via `@tauri-apps/api/event`,
+  comandos `events_ping` / `events_emit_diagnostic` /
+  `events_list_recent` / `events_clear_recent`, integração com
+  `projects.create/update/remove` (`type: "project/updated"`) e
+  emissão de `app/ready` no startup do Tauri. Preserva toda a
+  superfície `window.fluxora.events.*` legada (que continua mock
+  até o Mission Engine) e adiciona `subscribe` / `on` / `listRecent`
+  / `emitDiagnostic` / `clearRecent` / `unsubscribe` / `off`
+  roteados pelo Tauri com fallback mock fora do runtime Tauri.
 
 ## Convenções aplicadas em todas as PRs
 
