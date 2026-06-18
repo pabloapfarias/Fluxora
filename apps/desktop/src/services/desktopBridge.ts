@@ -4,30 +4,40 @@ import type {
   AgentStepOutput,
   AiModelInfo,
   AiProviderConfig,
+  Approval,
+  ApprovalImpact,
   AudioProviderSettings,
   AudioRetentionSettings,
   AudioTranscriptionInput,
   AudioTranscriptionResult,
+  BackgroundWorkflowJob,
+  CancelMissionJobInput,
   ChatOnceRequest,
   ChatOnceResult,
   CreateMissionInput,
   CreateProjectInput,
+  ExecutionApproval,
   FluxoraAPI,
   FluxoraEvent,
   FluxoraEventLevel,
   FluxoraEventSource,
   GitInspectionResult,
+  MissionJob,
   MissionLog,
   MissionRun,
   MissionStatus,
   OpenCodeCatalogResult,
   OpenCodeModel,
   OpenCodeProvider,
+  PermissionAction,
+  PermissionCheckResult,
   Project,
+  ProjectExecutionPolicy,
   ProviderTestResult,
   RunMissionInput,
   SelectDirectoryResult,
   UpdateProjectInput,
+  UpdateProjectPolicyInput,
   ValidatePathResult,
   WorkflowEvent,
   WorkflowRun,
@@ -839,6 +849,189 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
 // Helpers de baixo nível
 // ---------------------------------------------------------------------------
 
+// PR 009 — Conversão `ExecutionApproval` → `Approval` legado.
+// A UI existente consome o tipo `Approval` (com `impact` e
+// `workflowRunId`). A superfície canônica nova
+// `ExecutionApproval` adiciona `action`, `risk`, `missionId`,
+// `requestedBy` e `payload`. O `desktopBridge` faz a ponte.
+function toLegacyApproval(input: ExecutionApproval): Approval {
+  const impact: ApprovalImpact = (input.risk as ApprovalImpact) ?? "medium";
+  return {
+    id: input.id,
+    title: input.title,
+    description: input.description,
+    impact,
+    status:
+      input.status === "expired" || input.status === "cancelled"
+        ? "rejected"
+        : input.status,
+    projectId: input.projectId,
+    workflowRunId: input.missionId,
+    createdAt: input.createdAt,
+    resolvedAt: input.resolvedAt,
+  };
+}
+
+// PR 009 — Conversão `MissionJob` → `BackgroundWorkflowJob`
+// legado. A UI existente consome o tipo
+// `BackgroundWorkflowJob` (com `strategy`).
+function toLegacyJob(job: MissionJob): BackgroundWorkflowJob {
+  const strategy: BackgroundWorkflowJob["strategy"] =
+    job.mode === "piloto-automatico" ? "controlled_execution" : "single";
+  return {
+    id: job.id,
+    workflowRunId: job.missionId,
+    projectId: job.projectId,
+    strategy,
+    status: job.status as BackgroundWorkflowJob["status"],
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+  };
+}
+
+/** Lista aprovações via backend Tauri (ou [] se fora do runtime). */
+async function listApprovalsTauri(): Promise<ExecutionApproval[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<ExecutionApproval[]>("approvals_list", {});
+  } catch (error) {
+    console.warn("[desktopBridge] approvals_list falhou, usando []", error);
+    return [];
+  }
+}
+
+async function getApprovalByIdTauri(id: string): Promise<ExecutionApproval | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<ExecutionApproval | null>("approvals_get", { id });
+  } catch (error) {
+    console.warn("[desktopBridge] approvals_get falhou", error);
+    return null;
+  }
+}
+
+async function listActionableApprovalsTauri(): Promise<ExecutionApproval[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<ExecutionApproval[]>("approvals_list_actionable", {});
+  } catch (error) {
+    console.warn(
+      "[desktopBridge] approvals_list_actionable falhou, usando []",
+      error
+    );
+    return [];
+  }
+}
+
+async function approveApprovalTauri(id: string): Promise<ExecutionApproval> {
+  return await invoke<ExecutionApproval>("approvals_approve", { id });
+}
+
+async function rejectApprovalTauri(id: string): Promise<ExecutionApproval> {
+  return await invoke<ExecutionApproval>("approvals_reject", {
+    payload: { id },
+  });
+}
+
+async function cancelApprovalTauri(id: string): Promise<ExecutionApproval> {
+  return await invoke<ExecutionApproval>("approvals_cancel", {
+    payload: { id },
+  });
+}
+
+/** Lista policies via backend Tauri (ou [] se fora do runtime). */
+async function listPoliciesTauri(): Promise<ProjectExecutionPolicy[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<ProjectExecutionPolicy[]>("permissions_list_policies", {});
+  } catch (error) {
+    console.warn(
+      "[desktopBridge] permissions_list_policies falhou, usando []",
+      error
+    );
+    return [];
+  }
+}
+
+async function getProjectPolicyTauri(
+  projectId: string
+): Promise<ProjectExecutionPolicy | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<ProjectExecutionPolicy>(
+      "permissions_get_project_policy",
+      { projectId }
+    );
+  } catch (error) {
+    console.warn(
+      "[desktopBridge] permissions_get_project_policy falhou",
+      error
+    );
+    return null;
+  }
+}
+
+async function updateProjectPolicyTauri(
+  projectId: string,
+  input: UpdateProjectPolicyInput
+): Promise<ProjectExecutionPolicy> {
+  return await invoke<ProjectExecutionPolicy>(
+    "permissions_update_project_policy",
+    { projectId, payload: input }
+  );
+}
+
+async function resetProjectPolicyTauri(
+  projectId: string
+): Promise<ProjectExecutionPolicy> {
+  return await invoke<ProjectExecutionPolicy>(
+    "permissions_reset_project_policy",
+    { projectId }
+  );
+}
+
+async function checkPermissionTauri(input: {
+  projectId: string;
+  action: PermissionAction;
+  missionId?: string;
+}): Promise<PermissionCheckResult> {
+  return await invoke<PermissionCheckResult>("permissions_check", { payload: input });
+}
+
+async function listJobsTauri(): Promise<MissionJob[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<MissionJob[]>("scheduler_list_jobs", {});
+  } catch (error) {
+    console.warn("[desktopBridge] scheduler_list_jobs falhou, usando []", error);
+    return [];
+  }
+}
+
+async function getJobByIdTauri(jobId: string): Promise<MissionJob | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<MissionJob | null>("scheduler_get_job", { jobId });
+  } catch (error) {
+    console.warn("[desktopBridge] scheduler_get_job falhou", error);
+    return null;
+  }
+}
+
+async function cancelJobTauri(
+  input: CancelMissionJobInput
+): Promise<MissionJob | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<MissionJob | null>("scheduler_cancel_job", {
+      payload: input,
+    });
+  } catch (error) {
+    console.warn("[desktopBridge] scheduler_cancel_job falhou", error);
+    return null;
+  }
+}
+
 /** Lista missões via backend Tauri (ou [] se fora do runtime). */
 async function listMissions(): Promise<MissionRun[]> {
   if (!isTauriRuntime()) return [];
@@ -1335,28 +1528,39 @@ export function createDesktopBridge(): FluxoraAPI {
         }
         return mock.workflows.rerun(workflowRunId, overrides);
       },
-      async getJob(jobId: string): Promise<any> {
+      async getJob(jobId: string): Promise<BackgroundWorkflowJob | null> {
         if (isTauriRuntime()) {
-          // Sem scheduler real nesta PR — jobs são sempre
-          // síncronos. Devolvemos `null` (a UI trata como
-          // "job já concluído" e refaz a busca pela missão).
-          return null;
+          try {
+            const job = await getJobByIdTauri(jobId);
+            return job ? toLegacyJob(job) : null;
+          } catch (error) {
+            console.warn("[desktopBridge] workflows.getJob falhou, usando mock", error);
+          }
         }
         return mock.workflows.getJob(jobId);
       },
-      async listJobs(): Promise<any[]> {
+      async listJobs(): Promise<BackgroundWorkflowJob[]> {
         if (isTauriRuntime()) {
-          // Sem scheduler real nesta PR — `listJobs` devolve
-          // [] para a UI tratar a última missão como ativa
-          // via `workflows.list` + `events.list`.
-          return [];
+          try {
+            const jobs = await listJobsTauri();
+            return jobs.map(toLegacyJob);
+          } catch (error) {
+            console.warn("[desktopBridge] workflows.listJobs falhou, usando mock", error);
+          }
         }
         return mock.workflows.listJobs();
       },
-      async cancelJob(_jobId: string): Promise<void> {
-        // Sem cancelamento real nesta PR (missões são síncronas
-        // e já concluem rapidamente).
-        return;
+      async cancelJob(jobId: string): Promise<void> {
+        if (isTauriRuntime()) {
+          // PR 009 — Tenta cancelar o job real no scheduler.
+          // Missões em `running` continuam até o fim
+          // (síncronas nesta PR); o status do `MissionJob`
+          // reflete a intenção. Jobs `queued` são marcados
+          // como `cancelled` antes que `missions_run` pegue.
+          await cancelJobTauri({ jobId });
+          return;
+        }
+        return mock.workflows.cancelJob(jobId);
       },
       async approveFinal(_id: string): Promise<any> {
         // Sem aprovação real nesta PR (sem patch aplicado).
@@ -1392,6 +1596,146 @@ export function createDesktopBridge(): FluxoraAPI {
           }
         }
         return mock.workflows.listAgentOutputs(workflowRunId);
+      },
+    },
+    // PR 009 — Permissions Engine. Em runtime Tauri, delega
+    // para os comandos `permissions_*` reais. Fora do runtime
+    // Tauri, cai no fallback do `mock-api.ts` (que devolve a
+    // política default conservadora).
+    permissions: {
+      ping(): Promise<string> {
+        if (isTauriRuntime()) {
+          return invoke<string>("permissions_ping", {});
+        }
+        return mock.permissions.ping();
+      },
+      async getProjectPolicy(projectId: string): Promise<ProjectExecutionPolicy> {
+        if (isTauriRuntime()) {
+          const policy = await getProjectPolicyTauri(projectId);
+          if (policy) return policy;
+        }
+        return mock.permissions.getProjectPolicy(projectId);
+      },
+      async updateProjectPolicy(
+        projectId: string,
+        input: UpdateProjectPolicyInput
+      ): Promise<ProjectExecutionPolicy> {
+        if (isTauriRuntime()) {
+          try {
+            return await updateProjectPolicyTauri(projectId, input);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] updateProjectPolicy falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.permissions.updateProjectPolicy(projectId, input);
+      },
+      async listPolicies(): Promise<ProjectExecutionPolicy[]> {
+        if (isTauriRuntime()) {
+          try {
+            return await listPoliciesTauri();
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] listPolicies falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.permissions.listPolicies();
+      },
+      async resetProjectPolicy(projectId: string): Promise<ProjectExecutionPolicy> {
+        if (isTauriRuntime()) {
+          try {
+            return await resetProjectPolicyTauri(projectId);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] resetProjectPolicy falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.permissions.resetProjectPolicy(projectId);
+      },
+      async check(input: {
+        projectId: string;
+        action: PermissionAction;
+        missionId?: string;
+      }): Promise<PermissionCheckResult> {
+        if (isTauriRuntime()) {
+          try {
+            return await checkPermissionTauri(input);
+          } catch (error) {
+            // Em runtime Tauri, a falha de `permissions_check`
+            // é considerada `deny` por segurança (a UI vai
+            // pedir aprovação antes de continuar). Devolve um
+            // resultado determinístico.
+            console.warn(
+              "[desktopBridge] permissions.check falhou, usando deny",
+              error
+            );
+            return {
+              action: input.action,
+              decision: "deny",
+              allowed: false,
+              requiresApproval: false,
+              reason: error instanceof Error ? error.message : String(error),
+            };
+          }
+        }
+        return mock.permissions.check(input);
+      },
+    },
+    // PR 009 — Scheduler/fila mínima. Em runtime Tauri,
+    // delega para os comandos `scheduler_*` reais. Fora do
+    // runtime Tauri, cai no fallback do `mock-api.ts` (sem
+    // jobs).
+    scheduler: {
+      ping(): Promise<string> {
+        if (isTauriRuntime()) {
+          return invoke<string>("scheduler_ping", {});
+        }
+        return mock.scheduler.ping();
+      },
+      async listJobs(): Promise<MissionJob[]> {
+        if (isTauriRuntime()) {
+          try {
+            return await listJobsTauri();
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] scheduler.listJobs falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.scheduler.listJobs();
+      },
+      async getJob(jobId: string): Promise<MissionJob | null> {
+        if (isTauriRuntime()) {
+          try {
+            return await getJobByIdTauri(jobId);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] scheduler.getJob falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.scheduler.getJob(jobId);
+      },
+      async cancelJob(input: CancelMissionJobInput): Promise<MissionJob | null> {
+        if (isTauriRuntime()) {
+          try {
+            return await cancelJobTauri(input);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] scheduler.cancelJob falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.scheduler.cancelJob(input);
       },
     },
     providers: {
@@ -1619,6 +1963,101 @@ export function createDesktopBridge(): FluxoraAPI {
       },
       setAudioProvider(patch: Partial<AudioProviderSettings>) {
         return setAudioProviderSettings(mock, patch);
+      },
+    },
+    // PR 009 — Aprovações operacionais. Em runtime Tauri,
+    // delega para os comandos `approvals_*` reais e converte
+    // `ExecutionApproval` (canônico novo) para `Approval`
+    // (legado consumido pela UI atual). Fora do runtime Tauri,
+    // cai no mock legado (que mantém o comportamento atual da
+    // UI em modo navegador).
+    approvals: {
+      async listActionable(): Promise<Approval[]> {
+        if (isTauriRuntime()) {
+          try {
+            const list = await listActionableApprovalsTauri();
+            return list.map(toLegacyApproval);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] approvals.listActionable falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.approvals.listActionable();
+      },
+      async listPending(): Promise<Approval[]> {
+        if (isTauriRuntime()) {
+          try {
+            const list = await listApprovalsTauri();
+            return list
+              .filter((a) => a.status === "pending")
+              .map(toLegacyApproval);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] approvals.listPending falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.approvals.listPending();
+      },
+      async list(): Promise<Approval[]> {
+        if (isTauriRuntime()) {
+          try {
+            const list = await listApprovalsTauri();
+            return list.map(toLegacyApproval);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] approvals.list falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.approvals.list();
+      },
+      async approve(id: string): Promise<Approval> {
+        if (isTauriRuntime()) {
+          try {
+            const approval = await approveApprovalTauri(id);
+            return toLegacyApproval(approval);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] approvals.approve falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.approvals.approve(id);
+      },
+      async reject(id: string): Promise<Approval> {
+        if (isTauriRuntime()) {
+          try {
+            const approval = await rejectApprovalTauri(id);
+            return toLegacyApproval(approval);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] approvals.reject falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.approvals.reject(id);
+      },
+      async cancel(id: string): Promise<Approval | null> {
+        if (isTauriRuntime()) {
+          try {
+            const approval = await cancelApprovalTauri(id);
+            return toLegacyApproval(approval);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] approvals.cancel falhou",
+              error
+            );
+            return null;
+          }
+        }
+        return null;
       },
     },
   };

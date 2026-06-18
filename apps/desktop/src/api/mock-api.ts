@@ -14,6 +14,9 @@ import type {
   FluxoraEvent, FluxoraEventLevel, FluxoraEventSource,
   AiProviderConfig, AiModelInfo, ChatOnceRequest, ChatOnceResult,
   ProviderTestResult,
+  ProjectExecutionPolicy, PermissionAction, PermissionDecision,
+  UpdateProjectPolicyInput, PermissionCheckResult, MissionJob,
+  CancelMissionJobInput,
 } from "@fluxora/shared";
 import { buildVoiceContext } from "@fluxora/voice-context";
 
@@ -834,6 +837,10 @@ export function createMockAPI(): FluxoraAPI {
         emitApprovalChange(a);
         return a;
       },
+      // PR 009 — Cancelamento real só existe em runtime
+      // Tauri. No mock, devolve `null` (a UI trata a
+      // ausência como "operação não suportada aqui").
+      cancel: async (_id: string): Promise<Approval | null> => null,
     },
     agents: {
       list: async () => [...agents],
@@ -1296,6 +1303,117 @@ export function createMockAPI(): FluxoraAPI {
     env: {
       get: (key: string) => (typeof process !== "undefined" && process.env ? process.env[key] ?? null : null),
       has: (key: string) => Boolean(typeof process !== "undefined" && process.env && process.env[key]),
+    },
+    // PR 009 — Piloto automático (fallback mock fora do runtime
+    // Tauri). Os namespaces `permissions` e `scheduler` ficam
+    // disponíveis para a UI consumir em modo navegador; em
+    // runtime Tauri o `desktopBridge` sobrescreve estes
+    // namespaces com os comandos `permissions_*` e
+    // `scheduler_*` reais.
+    permissions: {
+      ping: async () => new Date().toISOString(),
+      getProjectPolicy: async (projectId: string): Promise<ProjectExecutionPolicy> => ({
+        projectId,
+        defaultMode: "propositivo",
+        permissions: {
+          "read-files": "allow",
+          "git-read": "allow",
+          "network-provider": "allow",
+          "write-files": "ask",
+          "create-files": "ask",
+          "delete-files": "deny",
+          "move-files": "ask",
+          "run-commands": "ask",
+          "install-dependencies": "ask",
+          "git-write": "deny",
+          "apply-patch": "ask",
+          "commit": "deny",
+          "push": "deny",
+        },
+        autopilotEnabled: false,
+        requireApprovalForHighRisk: true,
+        maxAutopilotSteps: 20,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      updateProjectPolicy: async (
+        projectId: string,
+        input: UpdateProjectPolicyInput,
+      ): Promise<ProjectExecutionPolicy> => ({
+        projectId,
+        defaultMode: input.defaultMode ?? "propositivo",
+        permissions: {
+          "read-files": "allow",
+          "git-read": "allow",
+          "network-provider": "allow",
+          "write-files": "ask",
+          "create-files": "ask",
+          "delete-files": "deny",
+          "move-files": "ask",
+          "run-commands": "ask",
+          "install-dependencies": "ask",
+          "git-write": "deny",
+          "apply-patch": "ask",
+          "commit": "deny",
+          "push": "deny",
+          ...(input.permissions ?? {}),
+        } as Record<PermissionAction, PermissionDecision>,
+        autopilotEnabled: input.autopilotEnabled ?? false,
+        requireApprovalForHighRisk: input.requireApprovalForHighRisk ?? true,
+        maxAutopilotSteps: input.maxAutopilotSteps ?? 20,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      listPolicies: async (): Promise<ProjectExecutionPolicy[]> => [],
+      resetProjectPolicy: async (projectId: string): Promise<ProjectExecutionPolicy> => ({
+        projectId,
+        defaultMode: "propositivo",
+        permissions: {
+          "read-files": "allow",
+          "git-read": "allow",
+          "network-provider": "allow",
+          "write-files": "ask",
+          "create-files": "ask",
+          "delete-files": "deny",
+          "move-files": "ask",
+          "run-commands": "ask",
+          "install-dependencies": "ask",
+          "git-write": "deny",
+          "apply-patch": "ask",
+          "commit": "deny",
+          "push": "deny",
+        },
+        autopilotEnabled: false,
+        requireApprovalForHighRisk: true,
+        maxAutopilotSteps: 20,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      check: async (input: {
+        projectId: string;
+        action: PermissionAction;
+        missionId?: string;
+      }): Promise<PermissionCheckResult> => {
+        // No browser mock, todas as permissões de leitura
+        // básica são `allow` para não bloquear o smoke-test
+        // da UI fora do Tauri.
+        const decision: PermissionDecision = "allow";
+        return {
+          action: input.action,
+          decision,
+          allowed: true,
+          requiresApproval: false,
+          reason: "Mock: todas as permissões liberadas no navegador.",
+        };
+      },
+    },
+    scheduler: {
+      ping: async () => new Date().toISOString(),
+      listJobs: async (): Promise<MissionJob[]> => [],
+      getJob: async (_jobId: string) => null,
+      cancelJob: async (
+        _input: CancelMissionJobInput,
+      ): Promise<MissionJob | null> => null,
     },
   };
 }

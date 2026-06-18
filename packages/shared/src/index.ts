@@ -763,7 +763,17 @@ export interface WorkflowRunJobResult {
 
 // Approval types
 export type ApprovalImpact = "low" | "medium" | "high";
-export type ApprovalStatus = "pending" | "approved" | "rejected";
+/**
+ * Status ampliado pela PR 009 (mantém os valores legados
+ * para a UI existente e adiciona `expired` e `cancelled`
+ * para a superfície canônica nova em runtime Tauri).
+ */
+export type ApprovalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "expired"
+  | "cancelled";
 
 export interface Approval {
   id: string;
@@ -1797,6 +1807,190 @@ export interface RunMissionInput {
   missionId: string;
 }
 
+// ============================================================================
+// PR 009 — Piloto automático com permissões por projeto
+// ============================================================================
+//
+// Esta camada adiciona:
+// - Modos de execução por missão (já introduzidos como `MissionMode`).
+// - Política de execução por projeto, com decisões `allow`/`ask`/`deny`.
+// - Sistema de aprovações operacionais com persistência local.
+// - Fila/scheduler mínima para missões (em memória nesta PR).
+// - Integração entre Mission Engine, permissões e aprovações.
+//
+// O piloto automático, nesta PR, significa executar missões
+// respeitando a política do projeto. A aplicação de patch/diff,
+// comandos shell, Git write operations e tool calling continuam
+// fora de escopo (ficam para a PR 010 e seguintes).
+
+/** Modo de execução da missão (alias semântico de `MissionMode`). */
+export type ExecutionMode = MissionMode;
+
+/** Decisão de uma permissão individual dentro de uma `ProjectExecutionPolicy`. */
+export type PermissionDecision = "allow" | "ask" | "deny";
+
+/** Ações controladas pela política de execução do projeto. */
+export type PermissionAction =
+  | "read-files"
+  | "write-files"
+  | "create-files"
+  | "delete-files"
+  | "move-files"
+  | "run-commands"
+  | "install-dependencies"
+  | "git-read"
+  | "git-write"
+  | "network-provider"
+  | "apply-patch"
+  | "commit"
+  | "push";
+
+/** Conjunto canônico de ações para iteração / UI. */
+export const PERMISSION_ACTIONS: PermissionAction[] = [
+  "read-files",
+  "write-files",
+  "create-files",
+  "delete-files",
+  "move-files",
+  "run-commands",
+  "install-dependencies",
+  "git-read",
+  "git-write",
+  "network-provider",
+  "apply-patch",
+  "commit",
+  "push",
+];
+
+/** Política padrão conservadora (piloto automático desativado). */
+export const DEFAULT_PERMISSION_DECISIONS: Record<PermissionAction, PermissionDecision> = {
+  "read-files": "allow",
+  "git-read": "allow",
+  "network-provider": "allow",
+  "write-files": "ask",
+  "create-files": "ask",
+  "delete-files": "deny",
+  "move-files": "ask",
+  "run-commands": "ask",
+  "install-dependencies": "ask",
+  "git-write": "deny",
+  "apply-patch": "ask",
+  "commit": "deny",
+  "push": "deny",
+};
+
+/**
+ * Política de execução por projeto. Controla como o Mission Engine
+ * e a UI devem se comportar diante de ações que tocam o projeto
+ * (ler arquivos, escrever, rodar comandos, chamar provider etc.).
+ *
+ * Persistida em `<app_data_dir>/fluxora/permissions.json` pela
+ * PR 009. Defaults conservadores; `autopilotEnabled: false` por
+ * padrão para evitar execução automática sem opt-in explícito.
+ */
+export interface ProjectExecutionPolicy {
+  projectId: string;
+  defaultMode: ExecutionMode;
+  permissions: Record<PermissionAction, PermissionDecision>;
+  autopilotEnabled: boolean;
+  requireApprovalForHighRisk: boolean;
+  maxAutopilotSteps?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Resultado da checagem de uma `PermissionAction` para um projeto. */
+export interface PermissionCheckResult {
+  action: PermissionAction;
+  decision: PermissionDecision;
+  allowed: boolean;
+  requiresApproval: boolean;
+  approvalId?: string;
+  reason?: string;
+}
+
+/**
+ * Status ampliado de uma `ExecutionApproval`. O legado
+ * `ApprovalStatus` ("pending" | "approved" | "rejected" |
+ * "expired" | "cancelled") é compartilhado entre o legado e a
+ * superfície canônica nova.
+ */
+
+/** Nível de risco de uma `ExecutionApproval`. */
+export type ApprovalRisk = "low" | "medium" | "high";
+
+/**
+ * Aprovação operacional (canônica nova, PR 009). Inclui
+ * `action`, `risk`, `payload` e `missionId` para ligar a
+ * aprovação à missão/projeto que a originou.
+ *
+ * O `desktopBridge` converte `ExecutionApproval` para o
+ * tipo legado `Approval` (sem `action`/`risk`/`payload`/
+ * `missionId`/`requestedBy`) ao expor `approvals.*` para a
+ * UI existente, preservando compatibilidade total.
+ */
+export interface ExecutionApproval {
+  id: string;
+  projectId?: string;
+  missionId?: string;
+  action: PermissionAction;
+  title: string;
+  description: string;
+  risk: ApprovalRisk;
+  status: ApprovalStatus;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+  requestedBy?: string;
+  payload?: unknown;
+}
+
+/** Input aceito por `approvals_create`. */
+export interface CreateApprovalInput {
+  projectId?: string;
+  missionId?: string;
+  action: PermissionAction;
+  title: string;
+  description: string;
+  risk: ApprovalRisk;
+  requestedBy?: string;
+  payload?: unknown;
+}
+
+/** Input aceito por `permissions_update_project_policy`. */
+export interface UpdateProjectPolicyInput {
+  defaultMode?: ExecutionMode;
+  permissions?: Partial<Record<PermissionAction, PermissionDecision>>;
+  autopilotEnabled?: boolean;
+  requireApprovalForHighRisk?: boolean;
+  maxAutopilotSteps?: number;
+}
+
+/**
+ * Estado observável de um job de missão no scheduler/fila
+ * básico da PR 009. Mantido em memória (não persistido
+ * nesta PR; a `MissionRun` correspondente em `missions.json`
+ * carrega o estado durável).
+ */
+export interface MissionJob {
+  id: string;
+  missionId: string;
+  projectId: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  mode: ExecutionMode;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+}
+
+/** Input aceito por `scheduler_cancel_job`. */
+export interface CancelMissionJobInput {
+  jobId: string;
+  reason?: string;
+}
+
 // IPC API types
 export interface FluxoraAPI {
   projects: {
@@ -1868,6 +2062,72 @@ export interface FluxoraAPI {
     list(): Promise<Approval[]>;
     approve(id: string): Promise<Approval>;
     reject(id: string): Promise<Approval>;
+    /**
+     * PR 009 — Cancela uma aprovação pendente. Devolve
+     * `null` quando a aprovação não está em estado
+     * pendente. Em runtime Tauri, delega para
+     * `approvals_cancel` (canônico novo); fora, devolve
+     * `null` (sem cancelamento no mock legado).
+     */
+    cancel(id: string): Promise<Approval | null>;
+  };
+  // ============================================================================
+  // PR 009 — Piloto automático: permissões, scheduler e aprovações operacionais
+  // ============================================================================
+  //
+  // Superfícies canônicas novas expostas em runtime Tauri. O
+  // `desktopBridge` é quem decide se delega para o backend Rust
+  // (em runtime Tauri) ou cai no fallback do `mock-api.ts` (no
+  // navegador/Vite dev).
+  //
+  // O `approvals.*` legado acima continua sendo a fonte que a
+  // UI atual consome; a forma canônica nova
+  // `ExecutionApproval` é exposta via `approvals.*` apenas
+  // através do `desktopBridge` (que converte). O canônico
+  // adicional para permissões é `permissions.*`.
+  permissions: {
+    /** Health-check do Permissions Engine. */
+    ping(): Promise<string>;
+    /** Retorna a política de um projeto (cria a default se não existir). */
+    getProjectPolicy(projectId: string): Promise<ProjectExecutionPolicy>;
+    /** Atualiza (merge) a política de um projeto. */
+    updateProjectPolicy(
+      projectId: string,
+      input: UpdateProjectPolicyInput
+    ): Promise<ProjectExecutionPolicy>;
+    /** Lista todas as políticas persistidas. */
+    listPolicies(): Promise<ProjectExecutionPolicy[]>;
+    /** Reseta a política de um projeto para a default. */
+    resetProjectPolicy(projectId: string): Promise<ProjectExecutionPolicy>;
+    /**
+     * Avalia uma `PermissionAction` para um projeto (e missão
+     * opcional). Cria automaticamente uma `ExecutionApproval`
+     * pendente quando a decisão for `ask`. Em runtime Tauri,
+     * dispara os eventos `permission/check` /
+     * `permission/allowed` / `permission/denied` /
+     * `permission/approval-required` no barramento.
+     */
+    check(input: {
+      projectId: string;
+      action: PermissionAction;
+      missionId?: string;
+    }): Promise<PermissionCheckResult>;
+  };
+  scheduler: {
+    /** Health-check do scheduler. */
+    ping(): Promise<string>;
+    /** Lista todos os jobs de missões conhecidos. */
+    listJobs(): Promise<MissionJob[]>;
+    /** Retorna um job por `id` (ou `null` se não existir). */
+    getJob(jobId: string): Promise<MissionJob | null>;
+    /**
+     * Tenta cancelar um job. Se a missão já estiver em
+     * `running`, a ação fica pendente de finalização
+     * (missões são síncronas nesta PR). Se estiver
+     * `queued`, o job transita para `cancelled` antes de
+     * `missions_run` ser chamado.
+     */
+    cancelJob(input: CancelMissionJobInput): Promise<MissionJob | null>;
   };
   agents: {
     list(): Promise<Agent[]>;

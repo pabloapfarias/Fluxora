@@ -5,6 +5,8 @@ mod missions;
 mod projects;
 mod providers;
 mod voice;
+mod approvals;
+mod permissions;
 
 use events::{
     AppEventsState, EmitDiagnosticInput, FluxoraEvent, ListRecentInput,
@@ -15,7 +17,10 @@ use filesystem::{
 use git::{
     GitAppInfo, GitChangedFile, GitCommitInfo, GitCommitsOptions, GitSummary,
 };
-use missions::{CreateMissionPayload, MissionLogRecord, MissionRecord, RunMissionPayload};
+use missions::{
+    CancelMissionJobPayload, CreateMissionPayload, MissionJobRecord, MissionLogRecord,
+    MissionRecord, RunMissionPayload,
+};
 use projects::{CreateProjectPayload, SelectDirectoryResult, UpdateProjectPayload};
 use providers::{
     ChatOncePayload, ChatOnceResultPayload, CreateProviderPayload, ProviderTestResultPayload,
@@ -24,6 +29,13 @@ use providers::{
 use voice::{
     TranscribePayload, UpdateSettingsPayload, VoiceProviderTestResult, VoiceState,
     VoiceTranscriptionResult,
+};
+use permissions::{
+    PermissionCheckPayload, PermissionCheckResultRecord, ProjectExecutionPolicyRecord,
+    UpdatePolicyPayload,
+};
+use approvals::{
+    CreateApprovalPayload, ExecutionApprovalRecord, RejectApprovalPayload, CancelApprovalPayload,
 };
 use serde::Serialize;
 use tauri::AppHandle;
@@ -419,6 +431,146 @@ fn missions_clear(app: AppHandle) -> Result<(), String> {
     missions::missions_clear(app)
 }
 
+// ---------------------------------------------------------------------------
+// Permissions (PR 009)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn permissions_ping() -> String {
+    permissions::permissions_ping()
+}
+
+#[tauri::command]
+fn permissions_get_project_policy(
+    app: AppHandle,
+    project_id: String,
+) -> Result<ProjectExecutionPolicyRecord, String> {
+    permissions::permissions_get_project_policy(app, project_id)
+}
+
+#[tauri::command]
+fn permissions_update_project_policy(
+    app: AppHandle,
+    project_id: String,
+    payload: UpdatePolicyPayload,
+) -> Result<ProjectExecutionPolicyRecord, String> {
+    permissions::permissions_update_project_policy(app, project_id, payload)
+}
+
+#[tauri::command]
+fn permissions_list_policies(
+    app: AppHandle,
+) -> Result<Vec<ProjectExecutionPolicyRecord>, String> {
+    permissions::permissions_list_policies(app)
+}
+
+#[tauri::command]
+fn permissions_reset_project_policy(
+    app: AppHandle,
+    project_id: String,
+) -> Result<ProjectExecutionPolicyRecord, String> {
+    permissions::permissions_reset_project_policy(app, project_id)
+}
+
+#[tauri::command]
+fn permissions_check(
+    app: AppHandle,
+    payload: PermissionCheckPayload,
+) -> Result<PermissionCheckResultRecord, String> {
+    permissions::permissions_check(app, payload)
+}
+
+// ---------------------------------------------------------------------------
+// Approvals (PR 009)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn approvals_ping() -> String {
+    approvals::approvals_ping()
+}
+
+#[tauri::command]
+fn approvals_list(app: AppHandle) -> Result<Vec<ExecutionApprovalRecord>, String> {
+    approvals::approvals_list(app)
+}
+
+#[tauri::command]
+fn approvals_get(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<ExecutionApprovalRecord>, String> {
+    approvals::approvals_get(app, id)
+}
+
+#[tauri::command]
+fn approvals_create(
+    app: AppHandle,
+    payload: CreateApprovalPayload,
+) -> Result<ExecutionApprovalRecord, String> {
+    approvals::approvals_create(app, payload)
+}
+
+#[tauri::command]
+fn approvals_approve(
+    app: AppHandle,
+    id: String,
+) -> Result<ExecutionApprovalRecord, String> {
+    approvals::approvals_approve(app, id)
+}
+
+#[tauri::command]
+fn approvals_reject(
+    app: AppHandle,
+    payload: RejectApprovalPayload,
+) -> Result<ExecutionApprovalRecord, String> {
+    approvals::approvals_reject(app, payload)
+}
+
+#[tauri::command]
+fn approvals_cancel(
+    app: AppHandle,
+    payload: CancelApprovalPayload,
+) -> Result<ExecutionApprovalRecord, String> {
+    approvals::approvals_cancel(app, payload)
+}
+
+#[tauri::command]
+fn approvals_list_actionable(
+    app: AppHandle,
+) -> Result<Vec<ExecutionApprovalRecord>, String> {
+    approvals::approvals_list_actionable(app)
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler (PR 009)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn scheduler_ping() -> String {
+    missions::scheduler_ping()
+}
+
+#[tauri::command]
+fn scheduler_list_jobs(app: AppHandle) -> Result<Vec<MissionJobRecord>, String> {
+    missions::scheduler_list_jobs(app)
+}
+
+#[tauri::command]
+fn scheduler_get_job(
+    app: AppHandle,
+    job_id: String,
+) -> Result<Option<MissionJobRecord>, String> {
+    missions::scheduler_get_job(app, job_id)
+}
+
+#[tauri::command]
+fn scheduler_cancel_job(
+    app: AppHandle,
+    payload: CancelMissionJobPayload,
+) -> Result<Option<MissionJobRecord>, String> {
+    missions::scheduler_cancel_job(app, payload)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -427,6 +579,9 @@ pub fn run() {
         .manage(VoiceState::new())
         .manage(providers::ProvidersState::new())
         .manage(missions::MissionsState::new())
+        .manage(missions::MissionJobsState::new())
+        .manage(permissions::PermissionsState::new())
+        .manage(approvals::ApprovalsState::new())
         .setup(|app| {
             // PR 006 — Carrega `voice.json` salvo no app data dir.
             // Falhas de I/O são logadas e descartadas; o app
@@ -441,6 +596,15 @@ pub fn run() {
             // PR 008 — Carrega `missions.json` salvo no app data
             // dir. Mesma estratégia de tolerância a falhas.
             missions::load_missions_on_startup(&handle);
+
+            // PR 009 — Carrega `permissions.json` salvo no app data
+            // dir (estado vazio até a primeira chamada de
+            // `getProjectPolicy`).
+            permissions::load_permissions_on_startup(&handle);
+
+            // PR 009 — Carrega `approvals.json` salvo no app data
+            // dir (estado vazio até a primeira criação).
+            approvals::load_approvals_on_startup(&handle);
 
             // Emite o evento `app/ready` no barramento assim que o
             // shell Tauri está pronto. Este é o primeiro evento real
@@ -508,7 +672,25 @@ pub fn run() {
             missions_run,
             missions_create_and_run,
             missions_list_logs,
-            missions_clear
+            missions_clear,
+            permissions_ping,
+            permissions_get_project_policy,
+            permissions_update_project_policy,
+            permissions_list_policies,
+            permissions_reset_project_policy,
+            permissions_check,
+            approvals_ping,
+            approvals_list,
+            approvals_get,
+            approvals_create,
+            approvals_approve,
+            approvals_reject,
+            approvals_cancel,
+            approvals_list_actionable,
+            scheduler_ping,
+            scheduler_list_jobs,
+            scheduler_get_job,
+            scheduler_cancel_job
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -119,6 +119,51 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   motor. UI preservada; sem piloto automático, sem
   scheduler, sem agente real, sem streaming, sem tool
   calling, sem storage seguro de secrets.
+- [PR 009 — Piloto automático com permissões por projeto](./STATUS_MIGRATION_TAURI_PR_009_AUTOPILOT_PERMISSIONS.md)
+  Cria a base real do piloto automático do FluxoraV1 em
+  Rust/Tauri. Adiciona os módulos `permissions.rs` e
+  `approvals.rs` no backend, integra o Mission Engine
+  (PR 008) ao sistema de permissões por projeto,
+  adiciona scheduler/fila mínima em memória, e emite
+  13 tipos de evento novos no barramento `fluxora-event`
+  (`permission/*`, `approval/*`, `mission/job-*`). Módulo
+  `permissions.rs` com `PermissionsState` persistido em
+  `<app_data_dir>/fluxora/permissions.json`, 6 comandos
+  Tauri (`permissions_ping` /
+  `permissions_get_project_policy` /
+  `permissions_update_project_policy` /
+  `permissions_list_policies` /
+  `permissions_reset_project_policy` /
+  `permissions_check`), política default conservadora
+  (`read-files`/`git-read`/`network-provider` → `allow`;
+  `delete-files`/`git-write`/`commit`/`push` → `deny`;
+  demais → `ask`), `autopilotEnabled: false` por padrão
+  e fallback automático de `piloto-automatico` →
+  `propositivo` quando o piloto está desativado. Módulo
+  `approvals.rs` com `ApprovalsState` persistido em
+  `<app_data_dir>/fluxora/approvals.json`, 8 comandos
+  Tauri (`approvals_ping` / `approvals_list` /
+  `approvals_get` / `approvals_create` /
+  `approvals_approve` / `approvals_reject` /
+  `approvals_cancel` / `approvals_list_actionable`),
+  integração automática com `permissions_check` (cria
+  `ExecutionApproval` quando a decisão for `ask`).
+  `missions_run` agora consulta `read-files` e
+  `network-provider` antes de prosseguir, com fallback
+  claro para ações `deny` ou `ask`. `desktopBridge`
+  adiciona os namespaces canônicos novos
+  `permissions.*` e `scheduler.*`, sobrescreve
+  `approvals.*` em runtime Tauri (convertendo
+  `ExecutionApproval` → `Approval` legado) e migra
+  `workflows.listJobs` / `getJob` / `cancelJob` para o
+  scheduler real (convertendo `MissionJob` →
+  `BackgroundWorkflowJob`). UI preservada — nenhum
+  componente React alterado. Missão continua
+  estritamente read-only/propositiva: não aplica
+  patches, não executa comandos de shell, não faz Git
+  write operations. Sem patch real, sem cancelamento
+  real de missões em `running`, sem tool calling, sem
+  streaming, sem storage seguro de secrets.
 
 ## Convenções aplicadas em todas as PRs
 

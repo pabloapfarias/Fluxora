@@ -1,7 +1,8 @@
 // PR 008 — Mission Engine inicial do FluxoraV1.
+// PR 009 — Piloto automático: scheduler/fila mínima e
+//          integração com o sistema de permissões por projeto.
 //
-// Cria o primeiro motor real de missões em Rust/Tauri. Esta PR
-// entrega a fundação observável e controlada:
+// A PR 008 entrega a fundação observável e controlada:
 //
 // - Persistência local de missões e logs em JSON versionado
 //   (`<app_data_dir>/fluxora/missions.json`).
@@ -25,11 +26,37 @@
 //   `mission/failed` / `mission/cancelled` no barramento
 //   `fluxora-event` (PR 005).
 //
+// A PR 009 adiciona:
+// - Estado de jobs (MissionJobRecord) em memória, com fila
+//   mínima e proteção contra execuções simultâneas da mesma
+//   missão.
+// - Comandos Tauri: `scheduler_ping` / `scheduler_list_jobs` /
+//   `scheduler_get_job` / `scheduler_cancel_job`.
+// - Eventos `mission/job-created` / `mission/job-started` /
+//   `mission/job-completed` / `mission/job-failed` /
+//   `mission/job-cancelled` no mesmo barramento.
+// - Integração com o Permissions Engine (PR 009) antes da
+//   coleta de contexto e antes da chamada do provider. A
+//   política default é conservadora (allow para `read-files`,
+//   `git-read` e `network-provider`; ask para `write-files`,
+//   `create-files`, `move-files`, `run-commands`,
+//   `install-dependencies`, `apply-patch`; deny para
+//   `delete-files`, `git-write`, `commit`, `push`).
+// - Suporte aos modos `assistido`, `propositivo` e
+//   `piloto-automatico` no `missions_create_and_run`. O modo
+//   `piloto-automatico` só é aceito quando a política do
+//   projeto tem `autopilotEnabled: true`; caso contrário a
+//   missão é degradada para `propositivo` (e o evento
+//   `mission/phase` registra o fallback).
+//
 // Não-objetivos desta PR (registrados para PRs futuras):
 // - Aplicar patch em arquivos do projeto.
-// - Piloto automático / scheduler / fila complexa.
-// - Agentes paralelos reais / tool calling / streaming.
-// - Marketplace de agents.
+// - Execução real de comandos de shell.
+// - Git write operations (commit, push, checkout, reset, ...).
+// - Tool calling.
+// - Streaming de provider.
+// - Agentes paralelos reais.
+// - Storage seguro de secrets.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -41,6 +68,7 @@ use std::time::SystemTime;
 use tauri::{AppHandle, Manager};
 
 use crate::events;
+use crate::permissions;
 use crate::projects;
 use crate::providers;
 
@@ -144,6 +172,42 @@ impl MissionsState {
     }
 }
 
+/// `MissionJob` da PR 009 — estado observável do scheduler/fila
+/// mínima em memória. Espelha a forma canônica nova em
+/// `@fluxora/shared`. **Não persistido em disco nesta PR** — a
+/// `MissionRun` correspondente em `missions.json` carrega o
+/// estado durável; o `MissionJob` é reconstruído no startup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionJobRecord {
+    pub id: String,
+    pub mission_id: String,
+    pub project_id: String,
+    pub status: String,
+    pub mode: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Estado em memória do scheduler/fila.
+pub struct MissionJobsState {
+    pub jobs: Mutex<Vec<MissionJobRecord>>,
+}
+
+impl MissionJobsState {
+    pub fn new() -> Self {
+        Self {
+            jobs: Mutex::new(Vec::new()),
+        }
+    }
+}
+
 /// Estrutura versionada do `missions.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MissionsFile {
@@ -192,6 +256,14 @@ pub struct CreateMissionPayload {
 #[serde(rename_all = "camelCase")]
 pub struct RunMissionPayload {
     pub mission_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelMissionJobPayload {
+    pub job_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -883,13 +955,34 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         ));
     }
 
+    // PR 009 — Criar `MissionJob` e resolver o modo efetivo
+    // (com fallback de `piloto-automatico` → `propositivo`
+    // quando a política do projeto tem `autopilotEnabled: false`).
+    let job = create_mission_job(&app, &mission)?;
+    let job_id = job.id.clone();
+    if let Err(error) = resolve_effective_mode(&app, &state, &mission) {
+        mark_job_failed(&app, Some(&job_id), &error);
+        fail_mission(&app, &state, &mission, &error, Some(&job_id));
+        return Err(error);
+    }
+    // Recarrega a missão após o fallback de modo (pode ter
+    // alterado `mode`).
+    let mission = match find_mission(&state, &mission_id) {
+        Some(m) => m,
+        None => {
+            let err = format!("Missão {mission_id} não encontrada.");
+            mark_job_failed(&app, Some(&job_id), &err);
+            return Err(err);
+        }
+    };
+
     // 1. Resolver provider/model
     let provider_state = app.state::<providers::ProvidersState>();
     let provider = match resolve_provider(&provider_state, mission.provider_id.as_deref()) {
         Some(p) => p,
         None => {
             let err = "Nenhum provider configurado. Cadastre um provider antes de executar missões.".to_string();
-            fail_mission(&app, &state, &mission, &err);
+            fail_mission(&app, &state, &mission, &err, Some(&job_id));
             return Err(err);
         }
     };
@@ -898,7 +991,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
             "Provider '{}' não está implementado nesta PR.",
             provider.kind
         );
-        fail_mission(&app, &state, &mission, &err);
+        fail_mission(&app, &state, &mission, &err, Some(&job_id));
         return Err(err);
     }
     let model = mission
@@ -912,7 +1005,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
                 "Nenhum modelo informado e o provider '{}' não tem defaultModel configurado.",
                 provider.name
             );
-            fail_mission(&app, &state, &mission, &err);
+            fail_mission(&app, &state, &mission, &err, Some(&job_id));
             return Err(err);
         }
     };
@@ -927,6 +1020,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
     })
     .unwrap_or_else(|| mission.clone());
     let _ = persist(&app);
+    let _ = mark_job_running(&app, &job_id);
     emit_mission_event(
         &app,
         "mission/started",
@@ -939,14 +1033,31 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
             "providerId": provider.id,
             "providerName": provider.name,
             "model": &model,
+            "mode": &running.mode,
+            "jobId": &job_id,
         })),
     );
+
+    // PR 009 — Checagem de permissão `read-files` antes da
+    // coleta de contexto. Em missões read-only/propositivas a
+    // decisão default é `allow`, então essa checagem só
+    // bloqueia em projetos com política explícita.
+    if let Err(error) = check_action_for_mission(&app, &running, "read-files", "context") {
+        let truncated = truncate_error(&error);
+        let _ = update_mission(&state, &running.id, |m| {
+            m.error = Some(truncated.clone());
+            m.current_phase = Some("failed".to_string());
+        });
+        let _ = persist(&app);
+        mark_job_failed(&app, Some(&job_id), &error);
+        return Err(error);
+    }
 
     // 3. Coletar contexto do projeto
     let project_root = match projects::find_project_path(&app, &running.project_id) {
         Ok(p) => p,
         Err(error) => {
-            fail_mission(&app, &state, &running, &error);
+            fail_mission(&app, &state, &running, &error, Some(&job_id));
             return Err(error);
         }
     };
@@ -1009,6 +1120,24 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         })),
     );
 
+    // PR 009 — Checagem de permissão `network-provider` antes
+    // da chamada real do provider. Em missões
+    // read-only/propositivas a decisão default é `allow`,
+    // então essa checagem só bloqueia em projetos com
+    // política explícita que negue acesso à rede.
+    if let Err(error) =
+        check_action_for_mission(&app, &running, "network-provider", "provider-call")
+    {
+        let truncated = truncate_error(&error);
+        let _ = update_mission(&state, &running.id, |m| {
+            m.error = Some(truncated.clone());
+            m.current_phase = Some("failed".to_string());
+        });
+        let _ = persist(&app);
+        mark_job_failed(&app, Some(&job_id), &error);
+        return Err(error);
+    }
+
     let chat = providers::execute_mission_chat(
         &app,
         &provider.id,
@@ -1029,7 +1158,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         }
         Err(error) => {
             let truncated = truncate_error(&error);
-            fail_mission(&app, &state, &running, &truncated);
+            fail_mission(&app, &state, &running, &truncated, Some(&job_id));
             return Err(truncated);
         }
     };
@@ -1058,6 +1187,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
     })
     .unwrap();
     let _ = persist(&app);
+    let _ = mark_job_completed(&app, &job_id);
     emit_mission_event(
         &app,
         "mission/completed",
@@ -1068,6 +1198,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         Some("final-report"),
         Some(serde_json::json!({
             "resultLength": result_text.chars().count(),
+            "jobId": &job_id,
         })),
     );
 
@@ -1075,11 +1206,14 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
 }
 
 /// Marca a missão como `failed` e emite o evento `mission/failed`.
+/// Quando `job_id` é fornecido, o `MissionJob` correspondente
+/// também transita para `failed` (PR 009).
 fn fail_mission(
     app: &AppHandle,
     state: &MissionsState,
     mission: &MissionRecord,
     error: &str,
+    job_id: Option<&str>,
 ) {
     let truncated = truncate_error(error);
     let updated = update_mission(state, &mission.id, |m| {
@@ -1112,6 +1246,7 @@ fn fail_mission(
             "errorMessage": truncated,
         })),
     );
+    mark_job_failed(app, job_id, error);
 }
 
 /// Lê metadados básicos do projeto (nome, stack) sem expor o
@@ -1130,6 +1265,439 @@ fn find_project_meta(app: &AppHandle, project_id: &str) -> Option<ProjectMeta> {
 struct ProjectMeta {
     name: String,
     stack: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// PR 009 — Scheduler/fila mínima
+// ---------------------------------------------------------------------------
+//
+// Representa cada execução de missão como um `MissionJob` em
+// memória. A persistência é responsabilidade da `MissionRun`
+// correspondente em `missions.json`; o `MissionJob` é
+// reconstruído no startup a partir das missões persistidas.
+
+const JOB_STATUS_QUEUED: &str = "queued";
+const JOB_STATUS_RUNNING: &str = "running";
+const JOB_STATUS_COMPLETED: &str = "completed";
+const JOB_STATUS_FAILED: &str = "failed";
+const JOB_STATUS_CANCELLED: &str = "cancelled";
+
+fn generate_job_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let millis = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("job-{millis}-{seq}")
+}
+
+fn find_active_job_for_mission(
+    state: &MissionJobsState,
+    mission_id: &str,
+) -> Option<MissionJobRecord> {
+    let guard = state.jobs.lock().ok()?;
+    guard
+        .iter()
+        .find(|j| {
+            j.mission_id == mission_id
+                && (j.status == JOB_STATUS_QUEUED || j.status == JOB_STATUS_RUNNING)
+        })
+        .cloned()
+}
+
+fn find_job_by_id(state: &MissionJobsState, job_id: &str) -> Option<MissionJobRecord> {
+    state
+        .jobs
+        .lock()
+        .ok()
+        .and_then(|guard| guard.iter().find(|j| j.id == job_id).cloned())
+}
+
+fn insert_job(state: &MissionJobsState, job: MissionJobRecord) {
+    if let Ok(mut guard) = state.jobs.lock() {
+        guard.push(job);
+    }
+}
+
+fn update_job<F>(state: &MissionJobsState, job_id: &str, mutator: F) -> Option<MissionJobRecord>
+where
+    F: FnOnce(&mut MissionJobRecord),
+{
+    let mut guard = state.jobs.lock().ok()?;
+    let job = guard.iter_mut().find(|j| j.id == job_id)?;
+    mutator(job);
+    job.updated_at = now_iso();
+    Some(job.clone())
+}
+
+/// Cria um `MissionJob` para a missão e o registra no
+/// `MissionJobsState`. Bloqueia criação se já houver um job
+/// ativo (`queued` ou `running`) para a mesma missão.
+fn create_mission_job(app: &AppHandle, mission: &MissionRecord) -> Result<MissionJobRecord, String> {
+    let state = app.state::<MissionJobsState>();
+    if let Some(existing) = find_active_job_for_mission(&state, &mission.id) {
+        return Err(format!(
+            "Já existe um job ativo ({}, status: {}) para a missão {}.",
+            existing.id, existing.status, mission.id
+        ));
+    }
+    let now = now_iso();
+    let job = MissionJobRecord {
+        id: generate_job_id(),
+        mission_id: mission.id.clone(),
+        project_id: mission.project_id.clone(),
+        status: JOB_STATUS_QUEUED.to_string(),
+        mode: mission.mode.clone(),
+        created_at: now.clone(),
+        updated_at: now,
+        started_at: None,
+        completed_at: None,
+        error: None,
+    };
+    insert_job(&state, job.clone());
+    emit_job_event(
+        app,
+        "mission/job-created",
+        "info",
+        &job,
+        "Job de missão criado.",
+        Some(serde_json::json!({ "mode": &job.mode })),
+    );
+    Ok(job)
+}
+
+fn mark_job_running(app: &AppHandle, job_id: &str) -> Option<MissionJobRecord> {
+    let state = app.state::<MissionJobsState>();
+    let updated = update_job(&state, job_id, |j| {
+        j.status = JOB_STATUS_RUNNING.to_string();
+        j.started_at = Some(now_iso());
+    })?;
+    emit_job_event(
+        app,
+        "mission/job-started",
+        "info",
+        &updated,
+        "Job de missão iniciado.",
+        None,
+    );
+    Some(updated)
+}
+
+fn mark_job_completed(app: &AppHandle, job_id: &str) -> Option<MissionJobRecord> {
+    let state = app.state::<MissionJobsState>();
+    let updated = update_job(&state, job_id, |j| {
+        j.status = JOB_STATUS_COMPLETED.to_string();
+        j.completed_at = Some(now_iso());
+    })?;
+    emit_job_event(
+        app,
+        "mission/job-completed",
+        "info",
+        &updated,
+        "Job de missão concluído.",
+        None,
+    );
+    Some(updated)
+}
+
+fn mark_job_failed(app: &AppHandle, job_id: Option<&str>, error: &str) {
+    let Some(job_id) = job_id else {
+        return;
+    };
+    let state = app.state::<MissionJobsState>();
+    let truncated = truncate_error(error);
+    if let Some(updated) = update_job(&state, job_id, |j| {
+        j.status = JOB_STATUS_FAILED.to_string();
+        j.error = Some(truncated.clone());
+        j.completed_at = Some(now_iso());
+    }) {
+        emit_job_event(
+            app,
+            "mission/job-failed",
+            "error",
+            &updated,
+            "Job de missão falhou.",
+            Some(serde_json::json!({ "errorMessage": truncated })),
+        );
+    }
+}
+
+fn mark_job_cancelled(app: &AppHandle, job_id: &str) -> Option<MissionJobRecord> {
+    let state = app.state::<MissionJobsState>();
+    let updated = update_job(&state, job_id, |j| {
+        j.status = JOB_STATUS_CANCELLED.to_string();
+        j.completed_at = Some(now_iso());
+    })?;
+    emit_job_event(
+        app,
+        "mission/job-cancelled",
+        "info",
+        &updated,
+        "Job de missão cancelado.",
+        None,
+    );
+    Some(updated)
+}
+
+fn emit_job_event(
+    app: &AppHandle,
+    event_type: &str,
+    level: &str,
+    job: &MissionJobRecord,
+    message: &str,
+    extra: Option<serde_json::Value>,
+) {
+    let mut payload = serde_json::json!({
+        "jobId": &job.id,
+        "missionId": &job.mission_id,
+        "projectId": &job.project_id,
+        "status": &job.status,
+        "mode": &job.mode,
+    });
+    if let Some(extra) = extra {
+        if let (Some(obj), Some(extra_obj)) = (payload.as_object_mut(), extra.as_object()) {
+            for (k, v) in extra_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    let event = events::build_event(
+        event_type,
+        "mission",
+        level,
+        Some(message.to_string()),
+        Some(job.project_id.clone()),
+        Some(job.mission_id.clone()),
+        None,
+        Some(payload),
+    );
+    events::emit_to_app(app, event);
+}
+
+// ---------------------------------------------------------------------------
+// PR 009 — Integração com o Permissions Engine
+// ---------------------------------------------------------------------------
+
+/// Helper que aplica o `permissions_check` para uma ação dentro
+/// do contexto de uma missão. Quando a decisão for `ask` ou
+/// `deny`, devolve `Err` com mensagem clara para que o
+/// `missions_run` falhe a missão; quando for `allow`, devolve
+/// `Ok(result)`. Emite `mission/phase` com payload de
+/// permissão.
+fn check_action_for_mission(
+    app: &AppHandle,
+    mission: &MissionRecord,
+    action: &str,
+    phase_label: &str,
+) -> Result<permissions::PermissionCheckResultRecord, String> {
+    let payload = permissions::PermissionCheckPayload {
+        project_id: mission.project_id.clone(),
+        action: action.to_string(),
+        mission_id: Some(mission.id.clone()),
+    };
+    let result = permissions::permissions_check(app.clone(), payload)?;
+    let state = app.state::<MissionsState>();
+    let _ = append_log(
+        &state,
+        &mission.id,
+        "info",
+        &format!(
+            "Permissão '{}' avaliada: decisão='{}', allowed={}, requires_approval={}",
+            action, result.decision, result.allowed, result.requires_approval
+        ),
+        Some(phase_label),
+        Some(serde_json::json!({
+            "permission": {
+                "action": &result.action,
+                "decision": &result.decision,
+                "allowed": result.allowed,
+                "requiresApproval": result.requires_approval,
+                "approvalId": &result.approval_id,
+                "reason": &result.reason,
+            }
+        })),
+    );
+    let _ = emit_mission_event(
+        app,
+        "mission/phase",
+        &mission.id,
+        Some(&mission.project_id),
+        if result.allowed { "info" } else { "warn" },
+        &format!(
+            "Permissão '{}' avaliada (decisão: {}).",
+            action, result.decision
+        ),
+        Some(phase_label),
+        Some(serde_json::json!({
+            "permission": {
+                "action": &result.action,
+                "decision": &result.decision,
+                "allowed": result.allowed,
+                "requiresApproval": result.requires_approval,
+                "approvalId": &result.approval_id,
+            }
+        })),
+    );
+    if result.allowed {
+        return Ok(result);
+    }
+    let reason = result.reason.clone().unwrap_or_else(|| {
+        format!(
+            "Política do projeto exige '{}' para a ação '{}'.",
+            result.decision, action
+        )
+    });
+    if result.requires_approval {
+        if let Some(approval_id) = &result.approval_id {
+            Err(format!(
+                "Ação '{}' requer aprovação: {}. Aprovação criada: {}.",
+                action, reason, approval_id
+            ))
+        } else {
+            Err(format!("Ação '{}' requer aprovação: {}.", action, reason))
+        }
+    } else {
+        Err(format!("Ação '{}' negada pela política do projeto: {}.", action, reason))
+    }
+}
+
+/// Resolve o modo efetivo da missão aplicando fallback quando o
+/// `piloto-automatico` é solicitado mas a política do projeto
+/// tem `autopilotEnabled: false`. Persiste o `mode` efetivo na
+/// missão e emite um `mission/phase` registrando o fallback.
+fn resolve_effective_mode(
+    app: &AppHandle,
+    state: &MissionsState,
+    mission: &MissionRecord,
+) -> Result<String, String> {
+    let policy = permissions::get_or_create_policy(app, &mission.project_id)?;
+    let requested = mission.mode.trim().to_lowercase();
+    let effective = if requested == "piloto-automatico" && !policy.autopilot_enabled {
+        let _ = emit_mission_event(
+            app,
+            "mission/phase",
+            &mission.id,
+            Some(&mission.project_id),
+            "warn",
+            "Piloto automático solicitado mas desativado na política do projeto. Degradando para 'propositivo'.",
+            Some("policy-fallback"),
+            Some(serde_json::json!({
+                "requestedMode": &requested,
+                "effectiveMode": "propositivo",
+                "autopilotEnabled": policy.autopilot_enabled,
+                "defaultMode": &policy.default_mode,
+            })),
+        );
+        "propositivo".to_string()
+    } else if requested.is_empty() || !["assistido", "propositivo", "piloto-automatico"]
+        .contains(&requested.as_str())
+    {
+        let fallback = policy.default_mode.clone();
+        let _ = emit_mission_event(
+            app,
+            "mission/phase",
+            &mission.id,
+            Some(&mission.project_id),
+            "info",
+            &format!(
+                "Modo '{}' desconhecido. Usando defaultMode da política: {}.",
+                requested, fallback
+            ),
+            Some("policy-fallback"),
+            Some(serde_json::json!({
+                "requestedMode": &requested,
+                "effectiveMode": &fallback,
+                "defaultMode": &fallback,
+            })),
+        );
+        fallback
+    } else {
+        requested
+    };
+    let _ = update_mission(state, &mission.id, |m| {
+        m.mode = effective.clone();
+    });
+    let _ = persist(app);
+    Ok(effective)
+}
+
+// ---------------------------------------------------------------------------
+// PR 009 — Comandos Tauri do scheduler/fila
+// ---------------------------------------------------------------------------
+
+/// Health-check do scheduler.
+pub fn scheduler_ping() -> String {
+    now_iso()
+}
+
+/// Lista todos os `MissionJob` conhecidos (mais recentes primeiro).
+pub fn scheduler_list_jobs(app: AppHandle) -> Result<Vec<MissionJobRecord>, String> {
+    let state = app.state::<MissionJobsState>();
+    let guard = state
+        .jobs
+        .lock()
+        .map_err(|_| "Lock de jobs poisoned.".to_string())?;
+    let mut out = guard.clone();
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(out)
+}
+
+/// Retorna um `MissionJob` por id.
+pub fn scheduler_get_job(
+    app: AppHandle,
+    job_id: String,
+) -> Result<Option<MissionJobRecord>, String> {
+    let state = app.state::<MissionJobsState>();
+    Ok(find_job_by_id(&state, &job_id))
+}
+
+/// Tenta cancelar um job. Comportamento:
+/// - Job `running`: marca o `MissionJob` como `cancelled`,
+///   mas como as missões são síncronas o `missions_run` em
+///   andamento não pode ser interrompido nesta PR. O status
+///   do `MissionJob` reflete a intenção; a `MissionRun`
+///   correspondente segue o ciclo normal.
+/// - Job `queued`: transita para `cancelled` antes que
+///   `missions_run` possa pegá-lo (a checagem
+///   `find_active_job_for_mission` é feita pelo
+///   `create_mission_job` no momento da criação do próximo
+///   job, então o efeito é: o job existente aparece como
+///   `cancelled` no `list_jobs`).
+pub fn scheduler_cancel_job(
+    app: AppHandle,
+    payload: CancelMissionJobPayload,
+) -> Result<Option<MissionJobRecord>, String> {
+    let state = app.state::<MissionJobsState>();
+    let Some(job) = find_job_by_id(&state, &payload.job_id) else {
+        return Ok(None);
+    };
+    if job.status == JOB_STATUS_COMPLETED
+        || job.status == JOB_STATUS_FAILED
+        || job.status == JOB_STATUS_CANCELLED
+    {
+        return Ok(Some(job));
+    }
+    let updated = mark_job_cancelled(&app, &payload.job_id).ok_or_else(|| {
+        format!("Job {} não encontrado para cancelamento.", payload.job_id)
+    })?;
+    if let Some(reason) = payload.reason.as_ref() {
+        // Registra o motivo do cancelamento como um log na
+        // missão correspondente (sem mutar o `result_text`).
+        let missions_state = app.state::<MissionsState>();
+        let _ = append_log(
+            &missions_state,
+            &updated.mission_id,
+            "info",
+            &format!("Job {} cancelado: {}", updated.id, reason),
+            Some("cancelled"),
+            Some(serde_json::json!({
+                "jobId": &updated.id,
+                "cancelReason": reason,
+            })),
+        );
+    }
+    Ok(Some(updated))
 }
 
 // ---------------------------------------------------------------------------
