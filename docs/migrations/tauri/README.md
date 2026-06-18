@@ -230,8 +230,8 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   missão — e ao Patch Engine (PR 010) — o Developer gera
   `fluxora_patch` que vira `PatchProposal` real via
   `patches::create_proposal_from_provider_text`.
-  `workflows.getStepOutputs(id)` /
-  `workflows.listAgentOutputs(id)` agora retornam os
+  `workflows.getStepOutputs(missionId)` /
+  `workflows.listAgentOutputs(missionId)` agora retornam os
   `AgentStepRecord` reais (convertidos para
   `AgentStepOutput` legado) em vez dos steps sintéticos
   da PR 008. `agents.listConfigs/getConfig/createConfig/
@@ -245,6 +245,41 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   tool calling, sem shell commands, sem Git write
   operations, sem OpenCode como motor. UI preservada —
   nenhum componente React alterado.
+- [PR 012 — Streaming de providers](./STATUS_MIGRATION_TAURI_PR_012_PROVIDER_STREAMING.md)
+  Adiciona streaming OpenAI-compatible ao Provider Engine
+  e integra esse streaming ao Agent Engine, Mission Engine
+  e barramento `fluxora-event`. Helper público
+  `providers::execute_mission_chat_stream` com callback
+  de chunks, parser SSE puro (`parse_sse_line`) com 10
+  testes unitários, helper `openai_chat_stream` que lê o
+  response como stream via `ureq::Response::into_reader()`,
+  e Tauri command `providers_chat_stream` registrado no
+  `invoke_handler` de `lib.rs`. 4 tipos de evento novos
+  no barramento `fluxora-event` —
+  `provider/stream-started` / `provider/stream-chunk` /
+  `provider/stream-completed` / `provider/stream-failed` —
+  mais `agent/step-chunk` emitido pelo Agent Engine para
+  cada delta de cada agente do pipeline. `MissionChatResult`
+  ganhou `chunks: u32` (default 0 para `chatOnce` da
+  PR 007; valor real para `chatStream` desta PR). Agent
+  Engine usa `execute_provider_chat_for_agent` que tenta
+  streaming primeiro e cai automaticamente em
+  `execute_mission_chat` quando o stream falha antes do
+  primeiro chunk (preservando o comportamento da PR 011).
+  Limites rígidos: 8 KiB/delta, 512 KiB/stream, 20 000
+  chunks/stream, 120s timeout, 500 chars erro. Tipos
+  compartilhados `ProviderStreamChunk`,
+  `ProviderStreamResult`, `ChatStreamRequest` e
+  `AgentStepChunkPayload` em `packages/shared/src/index.ts`.
+  Método canônico novo `window.fluxora.providers.chatStream`
+  exposto pelo `desktopBridge` em runtime Tauri e stubbed
+  fora dele pelo `mock-api.ts`. 64 testes Rust passando
+  (eram 54; +10 do SSE parser + 1 fix preexistente do
+  `parse_models_response_rejects_missing_data`).
+  `providers.chatOnce` legado preservado. Sem tool calling,
+  sem execução de comandos, sem Git write operations,
+  sem OpenCode como motor. UI preservada — nenhum
+  componente React alterado.
 
 ## Convenções aplicadas em todas as PRs
 
