@@ -18,6 +18,8 @@ import type {
   CancelMissionJobInput,
   ChatOnceRequest,
   ChatOnceResult,
+  ChatStreamRequest,
+  ProviderStreamResult,
   CreateAgentConfigInput,
   CreateMissionInput,
   CreatePatchProposalInput,
@@ -1551,6 +1553,61 @@ export async function chatOnce(
 }
 
 /**
+ * PR 012 — Fundação técnica: faz uma chamada de chat com
+ * streaming OpenAI-compatible. Os chunks incrementais são
+ * emitidos pelo backend Rust via `provider/stream-chunk` no
+ * barramento `fluxora-event` (consumido por
+ * `events.subscribe` / `events.on("provider/stream-chunk",
+ * cb)`). O `ProviderStreamResult` retornado aqui é o
+ * resultado final consolidado.
+ *
+ * Em runtime Tauri, delega para `providers_chat_stream` no
+ * `providers.rs`. Fora do runtime Tauri (modo
+ * navegador/Vite dev), devolve um stub vazio (o
+ * `mock-api.ts` faz a mesma coisa). Os chunks incrementais
+ * não são emitidos no fallback mock — comportamento simétrico
+ * ao `chatOnce`.
+ *
+ * **Não implementa tool calling, cancelamento real de stream
+ * ou execução de comandos.** O `chatOnce` continua sendo a
+ * forma não-streaming.
+ */
+export async function chatStream(
+  input: ChatStreamRequest
+): Promise<ProviderStreamResult> {
+  if (isTauriRuntime()) {
+    try {
+      return await invoke<ProviderStreamResult>("providers_chat_stream", {
+        payload: input,
+      });
+    } catch (error) {
+      return {
+        requestId: "stream-error",
+        providerId: input.providerId,
+        providerName: undefined,
+        model: input.model,
+        text: "",
+        durationMs: 0,
+        chunks: 0,
+        usage: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+  return {
+    requestId: "stream-mock",
+    providerId: input.providerId,
+    providerName: undefined,
+    model: input.model,
+    text: "",
+    durationMs: 0,
+    chunks: 0,
+    usage: { mock: true },
+  };
+}
+
+/**
  * Constrói um `OpenCodeCatalogResult` a partir dos providers
  * reais do Provider Engine. Usado pelo `desktopBridge` para
  * sobrescrever `opencode.getCatalog` em runtime Tauri quando
@@ -2116,6 +2173,14 @@ export function createDesktopBridge(): FluxoraAPI {
       },
       chatOnce(input: ChatOnceRequest) {
         return chatOnce(input);
+      },
+      // PR 012 — Streaming de providers. Em runtime Tauri,
+      // delega para `providers_chat_stream` no backend Rust.
+      // Chunks incrementais chegam via `provider/stream-chunk`
+      // no barramento `fluxora-event`. Fora do runtime Tauri,
+      // cai no mock legado (sem chunks reais).
+      chatStream(input: ChatStreamRequest) {
+        return chatStream(input);
       },
     },
     projects: {

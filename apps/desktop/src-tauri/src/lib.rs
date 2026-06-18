@@ -25,8 +25,8 @@ use missions::{
 };
 use projects::{CreateProjectPayload, SelectDirectoryResult, UpdateProjectPayload};
 use providers::{
-    ChatOncePayload, ChatOnceResultPayload, CreateProviderPayload, ProviderTestResultPayload,
-    StoredProvider, UpdateProviderPayload,
+    ChatOncePayload, ChatOnceResultPayload, ChatStreamPayload, CreateProviderPayload,
+    ProviderStreamResultPayload, ProviderTestResultPayload, StoredProvider, UpdateProviderPayload,
 };
 use voice::{
     TranscribePayload, UpdateSettingsPayload, VoiceProviderTestResult, VoiceState,
@@ -377,6 +377,18 @@ fn providers_chat_once(
     payload: ChatOncePayload,
 ) -> Result<ChatOnceResultPayload, String> {
     providers::providers_chat_once(app, payload)
+}
+
+// PR 012 — Streaming de providers. O progresso incremental
+// é emitido pelo barramento `fluxora-event` (eventos
+// `provider/stream-*`); este comando retorna apenas o
+// `ProviderStreamResultPayload` final consolidado.
+#[tauri::command]
+fn providers_chat_stream(
+    app: AppHandle,
+    payload: ChatStreamPayload,
+) -> Result<ProviderStreamResultPayload, String> {
+    providers::providers_chat_stream(app, payload)
 }
 
 // ---------------------------------------------------------------------------
@@ -917,6 +929,7 @@ pub fn run() {
             providers_test,
             providers_list_models,
             providers_chat_once,
+            providers_chat_stream,
             missions_ping,
             missions_list,
             missions_get,

@@ -1745,6 +1745,90 @@ export interface ChatOnceResult {
   usage?: unknown;
 }
 
+// ============================================================================
+// PR 012 — Streaming de providers
+// ============================================================================
+//
+// Esta camada adiciona streaming OpenAI-compatible ao Provider
+// Engine. O backend emite `provider/stream-*` no barramento
+// `fluxora-event` e o Agent Engine emite `agent/step-chunk`
+// para chunks incrementais por agente. O frontend expõe
+// `window.fluxora.providers.chatStream` para testes manuais.
+//
+// **Esta PR NÃO implementa tool calling, execução de comandos
+// ou cancelamento real de streams.** O fallback não-streaming
+// (`chatOnce`) continua disponível para providers que não
+// suportam `stream: true`.
+
+/** Tipos canônicos para o ciclo de vida de um stream. */
+export type ProviderStreamEventType =
+  | "provider/stream-started"
+  | "provider/stream-chunk"
+  | "provider/stream-completed"
+  | "provider/stream-failed";
+
+/** Tipos canônicos para chunks incrementais por agente. */
+export type AgentStreamEventType = "agent/step-chunk";
+
+/** Request para `providers_chat_stream` (streaming OpenAI-compatible). */
+export interface ChatStreamRequest {
+  providerId: string;
+  model?: string;
+  messages: ChatMessage[];
+  temperature?: number;
+  maxTokens?: number;
+}
+
+/**
+ * Chunk incremental emitido por `provider/stream-chunk` no
+ * barramento. Nunca inclui API key, prompt completo ou
+ * `messages` completas — apenas o `delta` de saída do modelo
+ * e metadados de progresso.
+ */
+export interface ProviderStreamChunk {
+  requestId: string;
+  providerId: string;
+  providerName?: string;
+  model?: string;
+  /** Índice sequencial do chunk (0-based). */
+  index: number;
+  /** Texto incremental produzido pelo modelo neste chunk. */
+  delta: string;
+  /** Tamanho acumulado (em chars) do stream até este chunk. */
+  accumulatedLength: number;
+  /** `true` quando o provider sinalizou fim do stream. */
+  done: boolean;
+  /** ISO 8601 do momento da emissão. */
+  createdAt: string;
+}
+
+/** Resultado final de `providers_chat_stream` (retornado ao caller). */
+export interface ProviderStreamResult {
+  requestId: string;
+  providerId: string;
+  providerName?: string;
+  model?: string;
+  text: string;
+  durationMs: number;
+  chunks: number;
+  usage?: unknown;
+}
+
+/** Payload de `agent/step-chunk` no barramento (PR 012). */
+export interface AgentStepChunkPayload {
+  stepId: string;
+  missionId: string;
+  projectId: string;
+  agentId: string;
+  agentName: string;
+  role: FluxoraAgentRole;
+  /** Índice sequencial do chunk do step (0-based). */
+  chunkIndex: number;
+  /** Texto incremental do modelo neste chunk. */
+  delta: string;
+  accumulatedLength: number;
+}
+
 /** Payload discriminado dos eventos `provider/*` no barramento. */
 export type ProviderEventType =
   | "provider/test-started"
@@ -1754,6 +1838,10 @@ export type ProviderEventType =
   | "provider/request-started"
   | "provider/request-completed"
   | "provider/request-failed"
+  | "provider/stream-started"
+  | "provider/stream-chunk"
+  | "provider/stream-completed"
+  | "provider/stream-failed"
   | "provider/settings-updated"
   | "provider/created"
   | "provider/updated"
@@ -2507,6 +2595,21 @@ export interface FluxoraAPI {
      * o Mission Engine em PR futura.
      */
     chatOnce(input: ChatOnceRequest): Promise<ChatOnceResult>;
+    /**
+     * PR 012 — Faz uma chamada de chat com streaming
+     * OpenAI-compatible. O backend emite `provider/stream-*`
+     * no barramento `fluxora-event` durante a execução e
+     * devolve o `ProviderStreamResult` consolidado ao final.
+     *
+     * Em runtime Tauri, delega para `providers_chat_stream`
+     * no `providers.rs`. Fora, cai no mock legado (sem chunks
+     * reais).
+     *
+     * **Não implementa tool calling, cancelamento real de
+     * stream ou execução de comandos.** O `chatOnce` continua
+     * sendo a forma não-streaming.
+     */
+    chatStream(input: ChatStreamRequest): Promise<ProviderStreamResult>;
   };
   voice: {
     createFromTranscript(input: string | { transcript: string; activeProject?: { id: string; name: string } | null; availableProjects?: Array<{ id: string; name: string }> }): Promise<VoiceContextResult>;

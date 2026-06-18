@@ -13,6 +13,7 @@ import type {
   WhisperDownloadProgress, WhisperModelInfo,
   FluxoraEvent, FluxoraEventLevel, FluxoraEventSource,
   AiProviderConfig, AiModelInfo, ChatOnceRequest, ChatOnceResult,
+  ChatStreamRequest, ProviderStreamResult,
   ProviderTestResult,
   ProjectExecutionPolicy, PermissionAction, PermissionDecision,
   UpdateProjectPolicyInput, PermissionCheckResult, MissionJob,
@@ -992,6 +993,20 @@ export function createMockAPI(): FluxoraAPI {
         providerId: input.providerId,
         model: input.model,
         durationMs: 0,
+        usage: { mock: true },
+      }),
+      // PR 012 — Streaming de providers. Mock sem chunks
+      // reais (devolve `text` vazio). A UI fora do runtime
+      // Tauri não recebe chunks incrementais — comportamento
+      // simétrico ao `chatOnce`.
+      chatStream: async (input: ChatStreamRequest): Promise<ProviderStreamResult> => ({
+        requestId: "mock-stream",
+        providerId: input.providerId,
+        providerName: undefined,
+        model: input.model,
+        text: "",
+        durationMs: 0,
+        chunks: 0,
         usage: { mock: true },
       }),
     },

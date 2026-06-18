@@ -995,6 +995,100 @@ pub(crate) struct MissionAgentsResult {
     pub patch_proposal_id: Option<String>,
 }
 
+/// PR 012 — Helper que executa uma chamada de provider com
+/// suporte a streaming + fallback automático para
+/// não-streaming. Usado por `run_mission_agents` no lugar da
+/// antiga `providers::execute_mission_chat` direta.
+///
+/// Comportamento:
+/// 1. Tenta `providers::execute_mission_chat_stream` (PR 012).
+///    Cada delta emitido pelo stream vira um evento
+///    `agent/step-chunk` no barramento `fluxora-event`.
+/// 2. Se o stream falhar **antes** de qualquer chunk ser
+///    enviado (ex.: provider respondeu com 400, ou erro de
+///    rede antes do primeiro byte), faz fallback transparente
+///    para `providers::execute_mission_chat` (PR 007). A UI
+///    recebe o output final normalmente, sem `agent/step-chunk`.
+/// 3. Se o stream falhar **após** algum chunk já ter sido
+///    enviado, propaga o erro para que o `run_mission_agents`
+///    marque o step como `failed` com mensagem clara. A
+///    saída parcial (até onde o stream chegou) é preservada
+///    no `AgentStepRecord.outputText` apenas em casos
+///    específicos — por padrão, o step é marcado como
+///    `failed` para evitar confundir o usuário com output
+///    parcial sem flag de erro.
+///
+/// Esta função NÃO altera o contrato do pipeline — recebe
+/// `(app, contexto, mensagens, max_tokens)` e devolve um
+/// `MissionChatResult` (com `chunks: u32`).
+fn execute_provider_chat_for_agent(
+    app: &AppHandle,
+    step_id: &str,
+    mission_id: &str,
+    project_id: &str,
+    agent_id: &str,
+    agent_name: &str,
+    role: &str,
+    provider_id: &str,
+    model: &str,
+    messages: &[providers::ChatMessagePayload],
+    max_tokens: Option<u32>,
+) -> Result<providers::MissionChatResult, String> {
+    // Contadores de chunks para a decisão de fallback.
+    let mut chunks_emitted: u32 = 0;
+    let stream_result = providers::execute_mission_chat_stream(
+        app,
+        provider_id,
+        model,
+        messages,
+        max_tokens,
+        None,
+        |delta: String, index: usize, accumulated: usize| {
+            chunks_emitted = chunks_emitted.saturating_add(1);
+            emit_agent_event(
+                app,
+                "agent/step-chunk",
+                "info",
+                &format!("Chunk {} do agente {} ({} chars).", index, agent_name, delta.chars().count()),
+                Some(project_id.to_string()),
+                Some(mission_id.to_string()),
+                Some(agent_id.to_string()),
+                Some(serde_json::json!({
+                    "stepId": step_id,
+                    "missionId": mission_id,
+                    "projectId": project_id,
+                    "agentId": agent_id,
+                    "agentName": agent_name,
+                    "role": role,
+                    "chunkIndex": index.saturating_sub(1),
+                    "delta": delta,
+                    "accumulatedLength": accumulated,
+                })),
+            );
+            Ok(())
+        },
+    );
+
+    match stream_result {
+        Ok(result) => Ok(result),
+        Err(err) if chunks_emitted == 0 => {
+            // Fallback transparente para não-streaming. A
+            // missão prossegue como antes da PR 012.
+            eprintln!(
+                "[fluxora agents] stream falhou antes do primeiro chunk, fallback para não-streaming: {err}"
+            );
+            providers::execute_mission_chat(
+                app,
+                provider_id,
+                model,
+                messages,
+                max_tokens,
+            )
+        }
+        Err(err) => Err(err),
+    }
+}
+
 /// Executa o pipeline de 4 agentes sequenciais (Planner →
 /// Developer → QA → Finalizer) para a missão. Persiste os
 /// `AgentStepRecord`, emite eventos `agent/*` e `mission/phase`,
@@ -1105,9 +1199,19 @@ pub fn run_mission_agents(
         let provider_id = agent.provider_id.as_deref().unwrap_or(ctx.default_provider_id);
         let model = agent.model.as_deref().unwrap_or(ctx.default_model);
 
-        // Chama o provider (com timeout via helper da PR 007).
-        let result = providers::execute_mission_chat(
+        // PR 012 — Chama o provider com streaming + fallback
+        // automático. Cada delta vira um evento
+        // `agent/step-chunk`. Se o stream falhar antes de
+        // qualquer chunk, faz fallback para `execute_mission_chat`
+        // (PR 007) — comportamento idêntico ao da PR 011.
+        let result = execute_provider_chat_for_agent(
             app,
+            &step_id,
+            &ctx.mission.id,
+            &ctx.mission.project_id,
+            &agent.id,
+            &agent.name,
+            &agent.role,
             provider_id,
             model,
             &messages,

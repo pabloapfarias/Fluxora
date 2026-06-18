@@ -24,6 +24,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -53,6 +54,30 @@ const MAX_ERROR_MESSAGE_LEN: usize = 500;
 
 /// Hard cap para `max_tokens` aceito pelo backend.
 pub const HARD_MAX_TOKENS: u32 = 32_000;
+
+// PR 012 — Limites de streaming OpenAI-compatible.
+// Definem o cap superior para um único `providers_chat_stream`
+// (ou `execute_mission_chat_stream` chamado pelo Agent Engine).
+// Qualquer violação aborta o stream com erro claro.
+
+/// Timeout total de um stream (envio + leitura de todos os chunks).
+/// Maior que `MISSION_CHAT_TIMEOUT_MS` porque o modelo pode levar
+/// mais tempo para emitir todos os tokens.
+pub const STREAM_TIMEOUT_MS: u64 = 120_000;
+
+/// Número máximo de chunks por stream. Evita loops infinitos
+/// ou providers mal-comportados.
+pub const MAX_STREAM_CHUNKS: usize = 20_000;
+
+/// Tamanho máximo do texto acumulado por stream (em bytes).
+/// 512 KiB é mais que suficiente para respostas típicas de
+/// modelos grandes.
+pub const MAX_STREAM_ACCUMULATED_BYTES: usize = 512 * 1024;
+
+/// Tamanho máximo de um único delta (em bytes). Limites
+/// arbitrários razoáveis; deltas maiores são provavelmente bug
+/// do provider.
+pub const MAX_STREAM_DELTA_BYTES: usize = 8 * 1024;
 
 /// Lista canônica de `kind` reconhecidos. Usada para validação
 /// leve. Adicionar novos valores requer suporte real no adapter.
@@ -396,12 +421,44 @@ fn default_message_for_kind(kind: &str) -> String {
         "provider/request-started" => "Requisição ao provider iniciada".to_string(),
         "provider/request-completed" => "Requisição ao provider concluída".to_string(),
         "provider/request-failed" => "Requisição ao provider falhou".to_string(),
+        "provider/stream-started" => "Stream de provider iniciado".to_string(),
+        "provider/stream-chunk" => "Chunk de stream de provider recebido".to_string(),
+        "provider/stream-completed" => "Stream de provider concluído".to_string(),
+        "provider/stream-failed" => "Stream de provider falhou".to_string(),
         "provider/settings-updated" => "Configurações de provider atualizadas".to_string(),
         "provider/created" => "Provider criado".to_string(),
         "provider/updated" => "Provider atualizado".to_string(),
         "provider/removed" => "Provider removido".to_string(),
         _ => format!("Evento provider: {kind}"),
     }
+}
+
+// PR 012 — Helper para emitir eventos `provider/stream-*` no
+// barramento `fluxora-event`. Mesma forma do `emit_provider_event`
+// mas com defaults apropriados para o ciclo de vida do stream.
+// Nunca inclui API key nem `messages` no payload — apenas
+// metadados de progresso e o `delta` incremental.
+fn emit_stream_event<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    kind: &str,
+    provider_id: &str,
+    provider_name: &str,
+    provider_kind: &str,
+    level: &str,
+    payload: serde_json::Value,
+) {
+    let event = events::build_event(
+        kind,
+        "provider",
+        level,
+        Some(default_message_for_kind(kind)),
+        None,
+        None,
+        None,
+        Some(payload),
+    );
+    let _ = (provider_id, provider_name, provider_kind);
+    events::emit_to_app(app, event);
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +546,42 @@ pub struct ChatOnceResultPayload {
     pub usage: Option<serde_json::Value>,
 }
 
+// PR 012 — Payloads de streaming OpenAI-compatible.
+
+/// Request aceito por `providers_chat_stream`. Igual a
+/// `ChatOncePayload` (com `stream: true` implícito).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamPayload {
+    pub provider_id: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    pub messages: Vec<ChatMessagePayload>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+/// Resultado final de `providers_chat_stream`. Retornado ao
+/// frontend quando o stream termina. Inclui `chunks` para
+/// diagnóstico (limite: 20 000).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderStreamResultPayload {
+    pub request_id: String,
+    pub provider_id: String,
+    pub provider_name: String,
+    pub model: String,
+    pub text: String,
+    pub duration_ms: u64,
+    pub chunks: u32,
+    pub usage: Option<serde_json::Value>,
+}
+
 // ---------------------------------------------------------------------------
 // Erros internos do adapter
 // ---------------------------------------------------------------------------
@@ -502,6 +595,10 @@ enum ProviderError {
     HttpStatus { status: u16, body: String },
     InvalidResponse(String),
     NoApiKey,
+    /// Erro retornado pelo callback do stream (ex.: Agent
+    /// Engine sinaliza cancelamento ou erro ao processar um
+    /// chunk). Nunca inclui API key.
+    Callback(String),
 }
 
 impl ProviderError {
@@ -514,6 +611,7 @@ impl ProviderError {
             ProviderError::HttpStatus { .. } => "http_error",
             ProviderError::InvalidResponse(_) => "invalid_response",
             ProviderError::NoApiKey => "missing_api_key",
+            ProviderError::Callback(_) => "callback_error",
         }
     }
 
@@ -532,6 +630,7 @@ impl ProviderError {
             }
             ProviderError::InvalidResponse(m) => format!("Resposta inválida: {m}"),
             ProviderError::NoApiKey => "API key não configurada para este provider.".to_string(),
+            ProviderError::Callback(m) => format!("Callback do stream falhou: {m}"),
         }
     }
 }
@@ -699,6 +798,254 @@ fn openai_chat_once(
             Err(ProviderError::Network(transport.to_string()))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// PR 012 — Streaming OpenAI-compatible (SSE)
+// ---------------------------------------------------------------------------
+//
+// Implementa `stream: true` sobre o adapter OpenAI-compatible.
+// O formato esperado é:
+//
+//   data: {"choices":[{"delta":{"content":"..."}}]}
+//   data: {"choices":[{"delta":{"content":"..."}}]}
+//   ...
+//   data: [DONE]
+//
+// Linhas vazias, comentários (`: ...`) e campos não-`data`
+// (`event:`, `id:`, `retry:`) são ignorados. O parser abaixo
+// é uma função pura testável unitariamente.
+
+/// Evento extraído de uma linha SSE.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SseEvent {
+    /// Linha vazia, comentário ou campo não-`data` (ignorado).
+    Empty,
+    /// `data: [DONE]` — fim do stream.
+    Done,
+    /// Delta incremental extraído do chunk OpenAI-compatible.
+    Delta(String),
+    /// JSON cru (chunk válido, mas sem `delta.content` extraível).
+    /// Pode acontecer em chunks de "ferramentas" ou quando o
+    /// provider usa um campo diferente — contado como chunk mas
+    /// sem adicionar texto.
+    Raw(String),
+}
+
+/// Faz o parse de uma única linha SSE. Retorna o evento
+/// correspondente. Esta função é pública para permitir testes
+/// unitários sem precisar de I/O.
+pub fn parse_sse_line(line: &str) -> SseEvent {
+    let trimmed = line.trim_end_matches(['\n', '\r']);
+    if trimmed.is_empty() {
+        return SseEvent::Empty;
+    }
+    // Comentário SSE: linhas que começam com `:`.
+    if trimmed.starts_with(':') {
+        return SseEvent::Empty;
+    }
+    // Apenas linhas `data:` interessam. Outras (`event:`, `id:`,
+    // `retry:`) são ignoradas.
+    if !trimmed.starts_with("data:") {
+        return SseEvent::Empty;
+    }
+    let payload = trimmed[5..].trim_start();
+    if payload.is_empty() {
+        return SseEvent::Empty;
+    }
+    if payload == "[DONE]" {
+        return SseEvent::Done;
+    }
+    // Tenta parsear JSON. Em caso de falha, devolve `Raw` para
+    // que o caller possa contar o chunk mas não falhe o stream
+    // por causa de um único JSON malformado.
+    let parsed: serde_json::Value = match serde_json::from_str(payload) {
+        Ok(v) => v,
+        Err(_) => return SseEvent::Raw(payload.to_string()),
+    };
+    // Tenta extrair `choices[0].delta.content` (formato
+    // OpenAI-compatible com `stream: true`).
+    if let Some(content) = parsed
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|choice| {
+            choice
+                .get("delta")
+                .and_then(|d| d.get("content"))
+                .and_then(|c| c.as_str())
+                // Fallback para adapters que enviam a mensagem
+                // inteira no primeiro chunk (sem `delta`).
+                .or_else(|| {
+                    choice
+                        .get("message")
+                        .and_then(|m| m.get("content"))
+                        .and_then(|c| c.as_str())
+                })
+        })
+    {
+        return SseEvent::Delta(content.to_string());
+    }
+    // Chunk sem `content` (ex.: chunk de finalização, ou chunk
+    // de `tool_calls` — fora do escopo desta PR).
+    SseEvent::Raw(payload.to_string())
+}
+
+/// Resumo de um stream OpenAI-compatible processado por
+/// `openai_chat_stream`.
+#[derive(Debug, Clone)]
+pub struct OpenAIStreamSummary {
+    pub text: String,
+    pub chunks: u32,
+    #[allow(dead_code)]
+    pub duration_ms: u64,
+}
+
+/// Faz uma chamada de chat OpenAI-compatible com `stream: true`
+/// e processa o SSE incrementalmente. Para cada delta extraído
+/// (ou seja, não vazio), chama `on_delta(&str)`. O callback
+/// pode devolver `Err` para abortar o stream com erro
+/// controlado.
+fn openai_chat_stream(
+    base_url: &str,
+    api_key: Option<&str>,
+    model: &str,
+    messages: &[ChatMessagePayload],
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    timeout: Duration,
+    mut on_delta: impl FnMut(&str) -> Result<(), String>,
+) -> Result<OpenAIStreamSummary, ProviderError> {
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+
+    let msgs_json: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            })
+        })
+        .collect();
+
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": msgs_json,
+        "stream": true,
+    });
+    if let Some(t) = temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    if let Some(mt) = max_tokens {
+        body["max_tokens"] = serde_json::json!(mt);
+    }
+
+    let agent: Agent = AgentBuilder::new().timeout(timeout).build();
+    let mut request = agent
+        .post(&url)
+        .set("Content-Type", "application/json")
+        .timeout(timeout);
+    if let Some(key) = api_key {
+        request = request.set("Authorization", &format!("Bearer {key}"));
+    }
+    let body_str = serde_json::to_string(&body)
+        .map_err(|e| ProviderError::InvalidResponse(format!("serialize: {e}")))?;
+
+    let response = match request.send_string(&body_str) {
+        Ok(r) => r,
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            return Err(ProviderError::HttpStatus { status, body });
+        }
+        Err(ureq::Error::Transport(transport)) => {
+            return Err(ProviderError::Network(transport.to_string()));
+        }
+    };
+    let status = response.status();
+    if status >= 400 {
+        let resp_body = response.into_string().unwrap_or_default();
+        return Err(ProviderError::HttpStatus {
+            status,
+            body: resp_body,
+        });
+    }
+    // `into_reader` devolve um `Box<dyn Read + Send + Sync>`
+    // que vamos consumir linha a linha.
+    let reader = response.into_reader();
+    let mut buf = std::io::BufReader::new(reader);
+
+    let started = Instant::now();
+    let mut line = String::new();
+    let mut full = String::new();
+    let mut chunk_count: u32 = 0;
+    let mut saw_done = false;
+    let mut non_empty_chunks: u32 = 0;
+
+    loop {
+        line.clear();
+        let read = match buf.read_line(&mut line) {
+            Ok(0) => break, // EOF
+            Ok(_n) => {}
+            Err(error) => {
+                return Err(ProviderError::Network(format!(
+                    "Falha de leitura no stream: {error}"
+                )));
+            }
+        };
+        let _ = read;
+        // Conta como chunk sempre que recebemos uma linha não-vazia
+        // e não-comentário.
+        let event = parse_sse_line(&line);
+        match event {
+            SseEvent::Empty => continue,
+            SseEvent::Done => {
+                saw_done = true;
+                break;
+            }
+            SseEvent::Raw(_) => {
+                chunk_count += 1;
+                if chunk_count as usize > MAX_STREAM_CHUNKS {
+                    return Err(ProviderError::InvalidResponse(format!(
+                        "Limite de {MAX_STREAM_CHUNKS} chunks excedido."
+                    )));
+                }
+                continue;
+            }
+            SseEvent::Delta(delta) => {
+                chunk_count += 1;
+                if chunk_count as usize > MAX_STREAM_CHUNKS {
+                    return Err(ProviderError::InvalidResponse(format!(
+                        "Limite de {MAX_STREAM_CHUNKS} chunks excedido."
+                    )));
+                }
+                if delta.len() > MAX_STREAM_DELTA_BYTES {
+                    return Err(ProviderError::InvalidResponse(format!(
+                        "Delta excede {MAX_STREAM_DELTA_BYTES} bytes."
+                    )));
+                }
+                if full.len() + delta.len() > MAX_STREAM_ACCUMULATED_BYTES {
+                    return Err(ProviderError::InvalidResponse(format!(
+                        "Texto acumulado excede {MAX_STREAM_ACCUMULATED_BYTES} bytes."
+                    )));
+                }
+                non_empty_chunks += 1;
+                full.push_str(&delta);
+                on_delta(&delta).map_err(ProviderError::Callback)?;
+            }
+        }
+    }
+
+    if !saw_done && full.is_empty() && non_empty_chunks == 0 {
+        return Err(ProviderError::InvalidResponse(
+            "Stream encerrado sem [DONE] nem conteúdo.".to_string(),
+        ));
+    }
+
+    Ok(OpenAIStreamSummary {
+        text: full,
+        chunks: chunk_count,
+        duration_ms: started.elapsed().as_millis() as u64,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1210,6 +1557,11 @@ pub struct MissionChatResult {
     pub provider_id: String,
     pub provider_name: String,
     pub duration_ms: u64,
+    /// Número de chunks recebidos. `0` para chamada
+    /// não-streaming (`execute_mission_chat` da PR 007);
+    /// `>= 1` para streaming (`execute_mission_chat_stream` da
+    /// PR 012).
+    pub chunks: u32,
     pub usage: Option<serde_json::Value>,
 }
 
@@ -1278,6 +1630,7 @@ pub fn execute_mission_chat(
             provider_id: provider.id.clone(),
             provider_name: provider.name.clone(),
             duration_ms: elapsed,
+            chunks: 0,
             usage,
         }),
         Err(err) => {
@@ -1295,6 +1648,209 @@ pub fn execute_mission_chat(
                     err.code()
                 );
             }
+            Err(msg)
+        }
+    }
+}
+
+/// Helper público invocado pelo Agent Engine (PR 011) e pelo
+/// comando Tauri `providers_chat_stream` (PR 012) para fazer
+/// uma chamada de chat com `stream: true` no adapter
+/// OpenAI-compatible. Emite `provider/stream-started`,
+/// `provider/stream-chunk` (por delta) e `provider/stream-completed`
+/// ou `provider/stream-failed` no barramento `fluxora-event`.
+///
+/// **Esta função NÃO inclui API key, prompt ou `messages` no
+/// payload dos eventos** — apenas metadados de progresso
+/// (`requestId`, `providerId`, `model`, `index`,
+/// `accumulatedLength`, `delta`) e o `delta` (saída do modelo).
+///
+/// Quando o provider não suporta streaming, esta função
+/// devolve `Err("Provider não suporta streaming")`. O caller
+/// (Agent Engine) decide se faz fallback para
+/// `execute_mission_chat` (não-streaming) ou se propaga o
+/// erro.
+pub fn execute_mission_chat_stream(
+    app: &AppHandle,
+    provider_id: &str,
+    model: &str,
+    messages: &[ChatMessagePayload],
+    max_tokens: Option<u32>,
+    request_id: Option<String>,
+    mut on_chunk: impl FnMut(String, usize, usize) -> Result<(), String>,
+) -> Result<MissionChatResult, String> {
+    let state = app.state::<ProvidersState>();
+    let provider = state
+        .snapshot()
+        .into_iter()
+        .find(|p| p.id == provider_id)
+        .ok_or_else(|| format!("Provider {provider_id} não encontrado."))?;
+
+    if !provider.enabled {
+        return Err("Provider desabilitado.".to_string());
+    }
+    if !is_supported_kind(&provider.kind) {
+        return Err(format!(
+            "Provider '{}' ainda não implementado nesta PR. Suportados: {}.",
+            provider.kind,
+            SUPPORTED_KINDS.join(", ")
+        ));
+    }
+    // Capabilities: quando `supports_streaming === Some(false)`,
+    // falhamos imediatamente. Quando `Some(true)` ou `None`,
+    // tentamos — adapters OpenAI-compatible modernos aceitam
+    // `stream: true`.
+    if let Some(caps) = &provider.capabilities {
+        if let Some(false) = caps.supports_streaming {
+            return Err("Provider não suporta streaming.".to_string());
+        }
+    }
+
+    let base_url = validate_base_url(
+        &provider
+            .base_url
+            .clone()
+            .or_else(|| default_base_url_for_kind(&provider.kind)),
+    )
+    .map_err(|e| e.message())?;
+    let api_key = resolve_api_key(&provider.api_key_env, false).map_err(|e| e)?;
+    let max_tokens = max_tokens
+        .map(|v| v.min(HARD_MAX_TOKENS).max(1))
+        .or(Some(1024));
+
+    let request_id = request_id.unwrap_or_else(|| {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        format!("stream-{millis}-{seq}")
+    });
+    let message_count = messages.len();
+    let api_key_for_log = api_key.clone();
+
+    emit_stream_event(
+        app,
+        "provider/stream-started",
+        &provider.id,
+        &provider.name,
+        &provider.kind,
+        "info",
+        serde_json::json!({
+            "requestId": &request_id,
+            "providerId": &provider.id,
+            "providerName": &provider.name,
+            "model": model,
+            "messageCount": message_count,
+            "maxTokens": max_tokens,
+        }),
+    );
+
+    let started = Instant::now();
+    // Acumulador de chunks. `index` é 0-based, monotonamente
+    // crescente por stream.
+    let mut index: usize = 0;
+    let mut accumulated: usize = 0;
+    let result = openai_chat_stream(
+        &base_url,
+        api_key.as_deref(),
+        model,
+        messages,
+        Some(0.7_f32),
+        max_tokens,
+        Duration::from_millis(STREAM_TIMEOUT_MS),
+        |delta| {
+            index += 1;
+            accumulated += delta.chars().count();
+            // Emite o evento de chunk com o índice 0-based.
+            emit_stream_event(
+                app,
+                "provider/stream-chunk",
+                &provider.id,
+                &provider.name,
+                &provider.kind,
+                "info",
+                serde_json::json!({
+                    "requestId": &request_id,
+                    "providerId": &provider.id,
+                    "providerName": &provider.name,
+                    "model": model,
+                    "index": index.saturating_sub(1),
+                    "delta": delta,
+                    "accumulatedLength": accumulated,
+                    "done": false,
+                }),
+            );
+            on_chunk(delta.to_string(), index, accumulated)
+        },
+    );
+    let elapsed = started.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(summary) => {
+            let text_length = summary.text.chars().count();
+            emit_stream_event(
+                app,
+                "provider/stream-completed",
+                &provider.id,
+                &provider.name,
+                &provider.kind,
+                "info",
+                serde_json::json!({
+                    "requestId": &request_id,
+                    "providerId": &provider.id,
+                    "providerName": &provider.name,
+                    "model": model,
+                    "durationMs": elapsed,
+                    "textLength": text_length,
+                    "chunks": summary.chunks,
+                }),
+            );
+            Ok(MissionChatResult {
+                text: summary.text,
+                model: model.to_string(),
+                provider_id: provider.id.clone(),
+                provider_name: provider.name.clone(),
+                duration_ms: elapsed,
+                chunks: summary.chunks,
+                usage: None,
+            })
+        }
+        Err(err) => {
+            let code = make_error_code("provider_stream", err.code());
+            let msg = truncate_error_message(&err.message());
+            if let Some(key) = &api_key_for_log {
+                eprintln!(
+                    "[fluxora providers] stream falhou base_url={base_url} key={} code={} msg={msg}",
+                    mask_api_key(key),
+                    err.code()
+                );
+            } else {
+                eprintln!(
+                    "[fluxora providers] stream falhou base_url={base_url} code={} msg={msg}",
+                    err.code()
+                );
+            }
+            emit_stream_event(
+                app,
+                "provider/stream-failed",
+                &provider.id,
+                &provider.name,
+                &provider.kind,
+                "error",
+                serde_json::json!({
+                    "requestId": &request_id,
+                    "providerId": &provider.id,
+                    "providerName": &provider.name,
+                    "model": model,
+                    "durationMs": elapsed,
+                    "errorCode": code,
+                    "errorMessage": msg,
+                }),
+            );
             Err(msg)
         }
     }
@@ -1431,6 +1987,80 @@ pub fn providers_chat_once(
     }
 }
 
+// PR 012 — Comando Tauri para streaming OpenAI-compatible.
+// O progresso incremental é emitido pelo barramento
+// `fluxora-event` (eventos `provider/stream-*`); o
+// `ProviderStreamResultPayload` retornado aqui é o resultado
+// final consolidado.
+///
+/// Faz uma chamada de chat com `stream: true` no adapter
+/// OpenAI-compatible. Emite `provider/stream-started` antes
+/// de enviar, `provider/stream-chunk` para cada delta
+/// incremental, e `provider/stream-completed` (com
+/// `textLength` e `chunks`) ou `provider/stream-failed` (com
+/// `errorCode`/`errorMessage`) ao final.
+///
+/// NUNCA inclui a API key, o prompt completo ou as mensagens
+/// no payload dos eventos.
+pub fn providers_chat_stream(
+    app: AppHandle,
+    payload: ChatStreamPayload,
+) -> Result<ProviderStreamResultPayload, String> {
+    let state = app.state::<ProvidersState>();
+    let provider = state
+        .snapshot()
+        .into_iter()
+        .find(|p| p.id == payload.provider_id)
+        .ok_or_else(|| format!("Provider {} não encontrado.", payload.provider_id))?;
+
+    if !provider.enabled {
+        return Err("Provider desabilitado.".to_string());
+    }
+    if !is_supported_kind(&provider.kind) {
+        return Err(format!(
+            "Provider '{}' ainda não implementado nesta PR. Suportados: {}.",
+            provider.kind,
+            SUPPORTED_KINDS.join(", ")
+        ));
+    }
+    let model = payload
+        .model
+        .clone()
+        .or_else(|| provider.default_model.clone())
+        .ok_or_else(|| {
+            "Nenhum modelo informado e o provider não tem `defaultModel` configurado."
+                .to_string()
+        })?;
+    let max_tokens = payload
+        .max_tokens
+        .map(|v| v.min(HARD_MAX_TOKENS).max(1))
+        .or(Some(1024));
+
+    // Streaming: para a UI, o callback só precisa acumular
+    // (não emitimos `agent/step-chunk` aqui — isso é papel do
+    // Agent Engine em `agents.rs`).
+    let result = execute_mission_chat_stream(
+        &app,
+        &provider.id,
+        &model,
+        &payload.messages,
+        max_tokens,
+        payload.request_id.clone(),
+        |_delta, _index, _accumulated| Ok(()),
+    )?;
+
+    Ok(ProviderStreamResultPayload {
+        request_id: payload.request_id.unwrap_or_else(|| "stream-unknown".to_string()),
+        provider_id: result.provider_id,
+        provider_name: result.provider_name,
+        model: result.model,
+        text: result.text,
+        duration_ms: result.duration_ms,
+        chunks: result.chunks,
+        usage: result.usage,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Testes unitários
 // ---------------------------------------------------------------------------
@@ -1545,5 +2175,105 @@ mod tests {
         let payload = serde_json::json!({"oops": 1});
         let result = parse_models_response(payload, "https://api.openai.com/v1");
         assert!(result.is_err());
+    }
+
+    // PR 012 — Testes do parser SSE.
+
+    #[test]
+    fn parse_sse_line_extracts_openai_delta() {
+        let line = r#"data: {"choices":[{"delta":{"content":"Olá"}}]}"#;
+        match parse_sse_line(line) {
+            SseEvent::Delta(d) => assert_eq!(d, "Olá"),
+            other => panic!("esperado Delta, recebi {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_sse_line_handles_done_marker() {
+        let line = "data: [DONE]";
+        assert_eq!(parse_sse_line(line), SseEvent::Done);
+    }
+
+    #[test]
+    fn parse_sse_line_ignores_empty_and_comments() {
+        assert_eq!(parse_sse_line(""), SseEvent::Empty);
+        assert_eq!(parse_sse_line("\n"), SseEvent::Empty);
+        assert_eq!(parse_sse_line("\r\n"), SseEvent::Empty);
+        assert_eq!(parse_sse_line(": keep-alive"), SseEvent::Empty);
+        assert_eq!(parse_sse_line("event: message"), SseEvent::Empty);
+        assert_eq!(parse_sse_line("id: 42"), SseEvent::Empty);
+        assert_eq!(parse_sse_line("retry: 1000"), SseEvent::Empty);
+    }
+
+    #[test]
+    fn parse_sse_line_ignores_data_with_empty_payload() {
+        assert_eq!(parse_sse_line("data:"), SseEvent::Empty);
+        assert_eq!(parse_sse_line("data: "), SseEvent::Empty);
+        assert_eq!(parse_sse_line("data:    "), SseEvent::Empty);
+    }
+
+    #[test]
+    fn parse_sse_line_treats_invalid_json_as_raw() {
+        // JSON inválido: não extrai delta, mas não falha.
+        let line = r#"data: {invalid json"#;
+        match parse_sse_line(line) {
+            SseEvent::Raw(s) => assert!(s.contains("invalid")),
+            other => panic!("esperado Raw, recebi {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_sse_line_handles_message_fallback() {
+        // Alguns providers (ex.: ollama sem `stream: true`
+        // configurado) podem enviar a mensagem inteira no
+        // primeiro chunk em `choices[0].message.content`.
+        let line = r#"data: {"choices":[{"message":{"content":"Fallback"}}]}"#;
+        match parse_sse_line(line) {
+            SseEvent::Delta(d) => assert_eq!(d, "Fallback"),
+            other => panic!("esperado Delta, recebi {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_sse_line_handles_chunk_without_content() {
+        // Chunk de finalização, sem `content`.
+        let line = r#"data: {"choices":[{"finish_reason":"stop"}]}"#;
+        match parse_sse_line(line) {
+            SseEvent::Raw(_) => {}
+            other => panic!("esperado Raw, recebi {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_sse_line_preserves_leading_space_after_colon() {
+        // O protocolo SSE exige um espaço após `data:` (mas é
+        // tolerante). Cobre ambos formatos.
+        assert!(matches!(
+            parse_sse_line(r#"data:{"choices":[{"delta":{"content":"x"}}]}"#),
+            SseEvent::Delta(_)
+        ));
+        assert!(matches!(
+            parse_sse_line(r#"data: {"choices":[{"delta":{"content":"x"}}]}"#),
+            SseEvent::Delta(_)
+        ));
+    }
+
+    #[test]
+    fn parse_sse_line_handles_multiple_choices_gracefully() {
+        // N>=2 choices: pegamos o primeiro.
+        let line = r#"data: {"choices":[{"delta":{"content":"A"}},{"delta":{"content":"B"}}]}"#;
+        match parse_sse_line(line) {
+            SseEvent::Delta(d) => assert_eq!(d, "A"),
+            other => panic!("esperado Delta, recebi {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_sse_line_handles_crlf_line_endings() {
+        let line = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\r\n";
+        match parse_sse_line(line) {
+            SseEvent::Delta(d) => assert_eq!(d, "x"),
+            other => panic!("esperado Delta, recebi {:?}", other),
+        }
     }
 }
