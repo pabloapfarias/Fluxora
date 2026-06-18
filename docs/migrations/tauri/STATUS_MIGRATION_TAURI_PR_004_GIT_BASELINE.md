@@ -248,17 +248,46 @@ tema/UI não desejadas.
 
 ## 10. Commits criados nesta PR
 
-Três commits locais, branch `main`, sem push remoto. Hashes
-gerados pelo Git do ambiente:
+Quatro commits locais na branch `main`, sem push remoto:
 
-| # | Mensagem | Hash (curto) |
-|---|---|---|
-| 1 | `chore: organize Tauri migration documentation baseline` | (gerado no commit) |
-| 2 | `chore: make pnpm dev launch Tauri desktop` | (gerado no commit) |
-| 3 | `chore: initialize FluxoraV1 Tauri migration baseline` | (gerado no commit) |
+1. `chore: organize Tauri migration documentation baseline` —
+   adiciona `.gitignore` e os status de migração das PRs 001..004
+   em `docs/migrations/tauri/`.
+2. `chore: make pnpm dev launch Tauri desktop` — ajusta scripts
+   da raiz e `tauri.conf.json` para que `pnpm dev` abra o Tauri
+   sem loop no `beforeDevCommand`.
+3. `chore: initialize FluxoraV1 Tauri migration baseline` —
+   baseline com todo o código-fonte acumulado das PRs 001..003
+   (UI React/TS, backend Rust/Tauri, packages workspace, lockfiles).
+4. `docs: update PR 004 status with final commit hashes` — commit
+   de sincronização: este status foi escrito antes dos commits
+   existirem; após criá-los, foi atualizado com os hashes reais
+   e consolidado em um único commit adicional.
 
-Os hashes completos são registrados no histórico Git local e podem
-ser inspecionados com `git log --oneline` e `git log --format=%H`.
+> Os hashes exatos dos quatro commits podem ser lidos com
+> `git log --format="%H %s" -n 4` no repositório local. Este
+> documento evita listar hashes literais porque o próprio commit
+> 4 é parte da mensagem deste status — listar seu hash aqui
+> produziria um snapshot desatualizado a cada amend.
+
+`git status` após os quatro commits:
+
+```text
+No ramo main
+nothing to commit, working tree clean
+```
+
+`git remote -v`:
+
+```text
+(vazio — nenhum remote configurado)
+```
+
+`git branch --show-current`:
+
+```text
+main
+```
 
 ## 11. Itens propositalmente não versionados
 
