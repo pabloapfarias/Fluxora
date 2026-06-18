@@ -203,6 +203,48 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   stash ou qualquer Git write operation. Sem shell
   commands, sem tool calling, sem streaming, sem storage
   seguro de secrets.
+- [PR 011 — Agentes reais e steps detalhados](./STATUS_MIGRATION_TAURI_PR_011_AGENTS_STEPS.md)
+  Cria a base real de agentes do FluxoraV1 em Rust/Tauri.
+  Substitui os `AgentStepOutput` sintéticos (derivados
+  dos logs pelo `buildSyntheticSteps` da PR 008) por
+  steps reais persistidos em
+  `<app_data_dir>/fluxora/agent_steps.json`. Módulo
+  `agents.rs` com `AgentsState` (configs + steps) e 4
+  agentes padrão criados sob demanda (Planner /
+  Developer / QA / Finalizer) com system prompts internos
+  seguros e IDs determinísticos. 10 comandos Tauri
+  (`agents_ping` / `agents_list` / `agents_get` /
+  `agents_create` / `agents_update` / `agents_remove` /
+  `agents_reset_defaults` / `agent_steps_list` /
+  `agent_steps_list_by_mission` / `agent_steps_get`),
+  7 testes unitários, 7 tipos de evento `agent/*` no
+  barramento `fluxora-event`
+  (`agent/defaults-created`,
+  `agent/settings-updated`, `agent/step-started`,
+  `agent/step-completed`, `agent/step-failed`,
+  `agent/plan-created`, `agent/qa-completed`).
+  `missions_run` agora executa um pipeline sequencial de
+  4 agentes via `agents::run_mission_agents`, com
+  integração ao Provider Engine (PR 007) — cada agente
+  pode ter `providerId`/`model` próprios ou herdar da
+  missão — e ao Patch Engine (PR 010) — o Developer gera
+  `fluxora_patch` que vira `PatchProposal` real via
+  `patches::create_proposal_from_provider_text`.
+  `workflows.getStepOutputs(id)` /
+  `workflows.listAgentOutputs(id)` agora retornam os
+  `AgentStepRecord` reais (convertidos para
+  `AgentStepOutput` legado) em vez dos steps sintéticos
+  da PR 008. `agents.listConfigs/getConfig/createConfig/
+  updateConfig/resetDefaults` (canônico novo) e
+  `agentSteps.listByMission/get` (canônico novo) e
+  `models.updateAgentConfigModel` (canônico novo)
+  adicionados ao `FluxoraAPI` e roteados pelo
+  `desktopBridge` em runtime Tauri. Limites rígidos
+  (256 KiB output, 1 000 chars input, 500 chars erro,
+  máximo 4 agentes por missão). Sem streaming, sem
+  tool calling, sem shell commands, sem Git write
+  operations, sem OpenCode como motor. UI preservada —
+  nenhum componente React alterado.
 
 ## Convenções aplicadas em todas as PRs
 
