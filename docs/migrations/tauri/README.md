@@ -56,6 +56,33 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   continua no renderer (`useMicCapture`); `whisper.*` (bundle),
   `whisperLocal.*` (download) e persistência de áudio em disco
   permanecem mock — PR estritamente incremental.
+- [PR 007 — Provider Engine próprio](./STATUS_MIGRATION_TAURI_PR_007_PROVIDER_ENGINE.md)
+  Cria o motor de providers do FluxoraV1 em Rust/Tauri,
+  eliminando a dependência conceitual do OpenCode CLI como
+  intermediário para chamadas aos modelos de IA. Módulo
+  `providers.rs` com `ProvidersState` persistido em
+  `<app_data_dir>/fluxora/providers.json`, adapter
+  OpenAI-compatible via `ureq` (mesmo da PR 006), suporte a
+  `openai-compatible` (real) e `anthropic` / `gemini` /
+  `mistral` / `deepseek` / `minimax` / `local` / `custom`
+  (reconhecidos, retornam erro "não implementado nesta PR"),
+  comandos `providers_ping` / `providers_list` /
+  `providers_get` / `providers_create` /
+  `providers_update` / `providers_remove` /
+  `providers_test` / `providers_list_models` /
+  `providers_chat_once`, e eventos `provider/test-started` /
+  `provider/test-completed` / `provider/test-failed` /
+  `provider/models-loaded` / `provider/request-started` /
+  `provider/request-completed` / `provider/request-failed` /
+  `provider/created` / `provider/updated` / `provider/removed`
+  no barramento `fluxora-event` da PR 005. `desktopBridge`
+  adiciona `window.fluxora.providers.*` (canônico novo) e
+  sobrescreve `opencode.getCatalog` / `getModelsForProvider` /
+  `refreshCatalog` em runtime Tauri para que a UI atual
+  (sem alteração) passe a refletir o Provider Engine quando
+  há providers cadastrados. UI preservada; sem streaming,
+  sem tool calling, sem Mission Engine, sem agente real,
+  sem piloto automático, sem storage seguro de secrets.
 
 ## Convenções aplicadas em todas as PRs
 
