@@ -1364,6 +1364,71 @@ export interface ValidatePathResult {
   error?: string;
 }
 
+// ============================================================================
+// PR 005 — Contrato de evento do barramento real
+// ============================================================================
+//
+// O barramento do FluxoraV1 trafega por um único canal do Tauri
+// (`fluxora-event`) e usa `type` para diferenciar o significado de
+// cada evento. A UI consome via `window.fluxora.events.subscribe(...)`
+// e filtra por `event.type`.
+//
+// O conjunto de `type` é aberto: backend e frontend podem adicionar
+// novos valores sem alterar o tipo base. Os valores abaixo são
+// recomendados pela PR 005 e formam o vocabulário mínimo que as
+// próximas PRs (Voice, Provider Engine, Mission Engine, Piloto
+// Automático) já podem assumir como existente.
+
+/** Origem do evento no FluxoraV1. */
+export type FluxoraEventSource =
+  | "app"
+  | "project"
+  | "mission"
+  | "agent"
+  | "voice"
+  | "system";
+
+/** Nível de severidade do evento. */
+export type FluxoraEventLevel = "debug" | "info" | "warn" | "error";
+
+/** Tipos canônicos recomendados para a PR 005. Outros valores são livres. */
+export type FluxoraEventType =
+  | "app/ready"
+  | "app/diagnostic"
+  | "project/opened"
+  | "project/updated"
+  | "project/removed"
+  | "mission/event"
+  | "mission/log"
+  | "mission/phase"
+  | "agent/event"
+  | "voice/event"
+  | "system/error";
+
+/** Evento genérico do barramento do FluxoraV1. */
+export interface FluxoraEvent {
+  /** Identificador único do evento. */
+  id: string;
+  /** Tipo semântico do evento (ex.: "app/ready", "project/updated"). */
+  type: string;
+  /** Momento de emissão em ISO 8601. */
+  timestamp: string;
+  /** Origem do evento no sistema. */
+  source: FluxoraEventSource;
+  /** Nível de severidade. */
+  level: FluxoraEventLevel;
+  /** ID do projeto associado, quando aplicável. */
+  projectId?: string;
+  /** ID da missão associada, quando aplicável. */
+  missionId?: string;
+  /** ID do agente associado, quando aplicável. */
+  agentId?: string;
+  /** Mensagem curta, legível, para UI/logs. */
+  message?: string;
+  /** Payload arbitrário para dados específicos do evento. */
+  payload?: unknown;
+}
+
 // IPC API types
 export interface FluxoraAPI {
   projects: {
@@ -1426,14 +1491,58 @@ export interface FluxoraAPI {
     openAudioFolder(): Promise<void>;
     probeServer(): Promise<boolean>;
   };
+  // ============================================================================
+  // PR 005 — Barramento de eventos do FluxoraV1 (Tauri event system)
+  // ============================================================================
+  //
+  // Os métodos `list`/`onWorkflowEvent`/`onJobUpdated`/`onApprovalChange`/
+  // `onOpenCodeStdout`/`onOpenCodeStderr`/`onOpenCodeJsonEvent` são o legado
+  // do mock do Electron, preservados para a UI existente. Eles só têm
+  // emissores reais quando o Mission Engine estiver em produção.
+  //
+  // Os métodos `subscribe`/`on`/`listRecent`/`emitDiagnostic`/`clearRecent`/
+  // `unsubscribe`/`off` formam a base real do barramento do FluxoraV1. Em
+  // runtime Tauri, escutam o canal `fluxora-event` emitido pelo backend
+  // Rust via `@tauri-apps/api/event`. Fora do runtime Tauri, voltam a
+  // emitir localmente em memória, mantendo a UI funcional no modo
+  // navegador/Vite dev.
   events: {
+    /** Lista eventos de workflow armazenados (legado/mock). */
     list(workflowRunId?: string): Promise<WorkflowEvent[]>;
+    /** Listener legado: eventos de workflow. Mock até o Mission Engine. */
     onWorkflowEvent(callback: (event: WorkflowEvent) => void): () => void;
+    /** Listener legado: atualização de job. Mock até o Mission Engine. */
     onJobUpdated(callback: (job: BackgroundWorkflowJob) => void): () => void;
+    /** Listener legado: mudança em aprovação. Mock até o Mission Engine. */
     onApprovalChange(callback: (approval: Approval) => void): () => void;
+    /** Listener legado: stdout do OpenCode. Mock até o Mission Engine. */
     onOpenCodeStdout(callback: (payload: { workflowRunId: string; jobId?: string; chunk: string }) => void): () => void;
+    /** Listener legado: stderr do OpenCode. Mock até o Mission Engine. */
     onOpenCodeStderr(callback: (payload: { workflowRunId: string; jobId?: string; chunk: string }) => void): () => void;
+    /** Listener legado: json-event do OpenCode. Mock até o Mission Engine. */
     onOpenCodeJsonEvent(callback: (payload: { workflowRunId: string; jobId?: string; event: unknown }) => void): () => void;
+    /** Assina o barramento real de eventos do FluxoraV1. */
+    subscribe(callback: (event: FluxoraEvent) => void): () => void;
+    /** Remove uma inscrição retornada por `subscribe`/`on`. */
+    unsubscribe(unsub: () => void): void;
+    /** Assina eventos do barramento real filtrando por `type` (ex.: "app/ready"). */
+    on(type: string, callback: (event: FluxoraEvent) => void): () => void;
+    /** Atalho para `unsubscribe`. */
+    off(unsub: () => void): void;
+    /** Lista os eventos recentes em memória no backend (ring buffer). */
+    listRecent(options?: { limit?: number; type?: string }): Promise<FluxoraEvent[]>;
+    /** Emite um evento de diagnóstico pelo backend e o devolve para o caller. */
+    emitDiagnostic(input: {
+      message: string;
+      level?: FluxoraEventLevel;
+      source?: FluxoraEventSource;
+      projectId?: string;
+      missionId?: string;
+      agentId?: string;
+      payload?: unknown;
+    }): Promise<FluxoraEvent>;
+    /** Limpa o ring buffer de eventos recentes. */
+    clearRecent(): Promise<void>;
   };
   opencode: {
     detect(): Promise<OpenCodeDetection>;

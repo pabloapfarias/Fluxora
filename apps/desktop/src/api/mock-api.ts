@@ -11,6 +11,7 @@ import type {
   WorkflowRerunInput,
   BackgroundWorkflowJob, OpenCodeDiagnosticResult, AudioRetentionSettings, AudioStorageStats,
   WhisperDownloadProgress, WhisperModelInfo,
+  FluxoraEvent, FluxoraEventLevel, FluxoraEventSource,
 } from "@fluxora/shared";
 import { buildVoiceContext } from "@fluxora/voice-context";
 
@@ -108,6 +109,49 @@ const stdoutListeners = new Set<(payload: { workflowRunId: string; jobId?: strin
 const stderrListeners = new Set<(payload: { workflowRunId: string; jobId?: string; chunk: string }) => void>();
 const jsonListeners = new Set<(payload: { workflowRunId: string; jobId?: string; event: unknown }) => void>();
 const approvalListeners = new Set<(approval: Approval) => void>();
+
+// PR 005 — Barramento de eventos do FluxoraV1 (fallback do mock).
+// Mantém um ring buffer em memória e um Set de listeners que recebem
+// o `FluxoraEvent` gerado localmente. Fora do runtime Tauri, o
+// `desktopBridge` roteia `events.subscribe`/`events.emitDiagnostic`/
+// `events.listRecent`/`events.clearRecent` para estas funções.
+const MOCK_RECENT_CAPACITY = 200;
+let mockRecentEvents: FluxoraEvent[] = [];
+let mockEventCounter = 0;
+const fluxoraEventListeners = new Set<(event: FluxoraEvent) => void>();
+
+function buildMockEvent(input: {
+  message: string;
+  level?: FluxoraEventLevel;
+  source?: FluxoraEventSource;
+  projectId?: string;
+  missionId?: string;
+  agentId?: string;
+  payload?: unknown;
+  type?: string;
+}): FluxoraEvent {
+  mockEventCounter += 1;
+  return {
+    id: `mock-evt-${mockEventCounter}`,
+    type: input.type || "app/diagnostic",
+    timestamp: new Date().toISOString(),
+    source: input.source || "app",
+    level: input.level || "info",
+    projectId: input.projectId,
+    missionId: input.missionId,
+    agentId: input.agentId,
+    message: input.message,
+    payload: input.payload,
+  };
+}
+
+function pushMockEvent(event: FluxoraEvent) {
+  mockRecentEvents.push(event);
+  if (mockRecentEvents.length > MOCK_RECENT_CAPACITY) {
+    mockRecentEvents = mockRecentEvents.slice(-MOCK_RECENT_CAPACITY);
+  }
+  for (const listener of fluxoraEventListeners) listener(event);
+}
 
 function emitWorkflowEvent(event: WorkflowEvent) {
   workflowEvents.push(event);
@@ -882,6 +926,47 @@ export function createMockAPI(): FluxoraAPI {
       onOpenCodeStdout: (callback: (payload: { workflowRunId: string; jobId?: string; chunk: string }) => void) => subscribe(stdoutListeners, callback),
       onOpenCodeStderr: (callback: (payload: { workflowRunId: string; jobId?: string; chunk: string }) => void) => subscribe(stderrListeners, callback),
       onOpenCodeJsonEvent: (callback: (payload: { workflowRunId: string; jobId?: string; event: unknown }) => void) => subscribe(jsonListeners, callback),
+      // PR 005 — Barramento real do FluxoraV1 (fallback mock fora do
+      // runtime Tauri). Mantém a mesma forma do barramento Tauri para
+      // que o `desktopBridge` apenas roteie.
+      subscribe: (callback: (event: FluxoraEvent) => void) =>
+        subscribe(fluxoraEventListeners, callback),
+      unsubscribe: (unsub: () => void) => {
+        try { unsub(); } catch { /* ignore */ }
+      },
+      on: (type: string, callback: (event: FluxoraEvent) => void) => {
+        const wrapped = (event: FluxoraEvent) => {
+          if (event.type === type) callback(event);
+        };
+        return subscribe(fluxoraEventListeners, wrapped);
+      },
+      off: (unsub: () => void) => {
+        try { unsub(); } catch { /* ignore */ }
+      },
+      listRecent: async (options?: { limit?: number; type?: string }) => {
+        const limit = options?.limit ?? 50;
+        const typeFilter = options?.type;
+        let events = [...mockRecentEvents].reverse();
+        if (typeFilter) events = events.filter((event) => event.type === typeFilter);
+        if (limit > 0) events = events.slice(0, limit);
+        return events;
+      },
+      emitDiagnostic: async (input: {
+        message: string;
+        level?: FluxoraEventLevel;
+        source?: FluxoraEventSource;
+        projectId?: string;
+        missionId?: string;
+        agentId?: string;
+        payload?: unknown;
+      }) => {
+        const event = buildMockEvent({ ...input, type: "app/diagnostic" });
+        pushMockEvent(event);
+        return event;
+      },
+      clearRecent: async () => {
+        mockRecentEvents = [];
+      },
     },
     opencode: {
       detect: async (): Promise<OpenCodeDetection> => {

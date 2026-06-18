@@ -66,15 +66,15 @@ pub struct ValidatePathResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectResponse {
-    id: String,
-    name: String,
-    path: String,
-    stack: Vec<String>,
-    status: String,
-    current_agent: Option<String>,
-    last_action: Option<String>,
-    created_at: String,
-    updated_at: String,
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub stack: Vec<String>,
+    pub status: String,
+    pub current_agent: Option<String>,
+    pub last_action: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
