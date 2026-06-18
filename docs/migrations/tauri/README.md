@@ -164,6 +164,45 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   write operations. Sem patch real, sem cancelamento
   real de missões em `running`, sem tool calling, sem
   streaming, sem storage seguro de secrets.
+- [PR 010 — Apply patch/diff controlado](./STATUS_MIGRATION_TAURI_PR_010_PATCH_DIFF.md)
+  Adiciona o Patch Engine do FluxoraV1 em Rust/Tauri,
+  permitindo que missões proponham alterações em formato
+  estruturado (`fluxora_patch` na resposta do provider) e
+  que essas alterações sejam aplicadas de forma
+  controlada, respeitando a política do projeto e
+  exigindo aprovação explícita quando a decisão for
+  `ask`. Módulo `patches.rs` com `PatchesState`
+  persistido em `<app_data_dir>/fluxora/patches.json`,
+  9 comandos Tauri (`patches_ping` / `patches_list` /
+  `patches_get` / `patches_list_by_mission` /
+  `patches_create` / `patches_apply` / `patches_reject` /
+  `patches_get_changed_files` / `patches_get_file_diff`),
+  10 tipos de evento `patch/*` + 1 `diff/generated` no
+  barramento `fluxora-event`, 12 testes unitários,
+  validação rigorosa de paths (rejeita `..`, absolutos,
+  drive letters, 12 diretórios proibidos) e limites
+  (20 arquivos/proposta, 256 KiB/arquivo, 1 MiB total).
+  Parser `fluxora_patch` adicionado ao `missions.rs`
+  (extrai bloco markdown da resposta, valida JSON/paths,
+  tira snapshot de `beforeContent` do disco, calcula
+  additions/deletions via LCS, cria `PatchProposal`).
+  Aplicação atômica via `write_atomic` (temp + rename).
+  `approvals_approve` estendido: detecta aprovações de
+  `apply-patch` e dispara `patches_apply` automaticamente
+  via `proposalId` no payload. `git.changedFiles(
+  workflowRunId)` e `git.fileDiff(workflowRunId, filePath)`
+  agora são reais em runtime Tauri (convertem
+  `PatchFileChange[]` para as formas legadas `ChangedFile`
+  / `FileDiff` consumidas pelo Diff Viewer da UI). UI
+  preservada — nenhum componente React alterado.
+  `desktopBridge` adiciona o namespace canônico novo
+  `patches.*` e sobrescreve `git.changedFiles` /
+  `git.fileDiff` / `workflows.approveFinal` /
+  `workflows.rejectFinal` em runtime Tauri. Sem commit,
+  push, checkout, reset, merge, rebase, branch, tag,
+  stash ou qualquer Git write operation. Sem shell
+  commands, sem tool calling, sem streaming, sem storage
+  seguro de secrets.
 
 ## Convenções aplicadas em todas as PRs
 
