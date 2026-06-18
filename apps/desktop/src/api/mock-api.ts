@@ -937,6 +937,60 @@ export function createMockAPI(): FluxoraAPI {
         usage: { mock: true },
       }),
     },
+    // PR 008 — Mission Engine (fallback mock fora do runtime Tauri).
+    // Em runtime Tauri, o `desktopBridge` sobrescreve este namespace
+    // com os comandos `missions_*` reais. Aqui, devolvemos um
+    // stub que aceita `create` (no-op) e devolve listas vazias
+    // para o resto, para a UI não quebrar no smoke-test em browser.
+    missions: {
+      ping: async () => new Date().toISOString(),
+      list: async () => [],
+      get: async (_id: string) => null,
+      create: async (input: any) => ({
+        id: `mock-mission-${Date.now()}`,
+        projectId: input.projectId,
+        title: input.title || input.prompt.slice(0, 60),
+        prompt: input.prompt,
+        status: "queued" as const,
+        mode: input.mode || "propositivo",
+        providerId: input.providerId,
+        model: input.model,
+        currentPhase: "created" as const,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      run: async (input: { missionId: string }) => {
+        // No mock, marca como completed com texto vazio.
+        return {
+          id: input.missionId,
+          projectId: "mock",
+          title: "Mock Mission",
+          prompt: "",
+          status: "completed" as const,
+          mode: "propositivo" as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      },
+      createAndRun: async (input: any) => ({
+        id: `mock-mission-${Date.now()}`,
+        projectId: input.projectId,
+        title: input.title || input.prompt.slice(0, 60),
+        prompt: input.prompt,
+        status: "completed" as const,
+        mode: input.mode || "propositivo",
+        providerId: input.providerId,
+        model: input.model,
+        currentPhase: "final-report" as const,
+        resultText: "(Mission Engine só funciona em runtime Tauri.)",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      listLogs: async (_missionId: string) => [],
+      clear: async () => {
+        // noop
+      },
+    },
     voice: {
       createFromTranscript: async (input: any) => buildVoiceContext(typeof input === "string" ? { transcript: input } : input),
       transcribe: async (input: AudioTranscriptionInput): Promise<AudioTranscriptionResult> => {

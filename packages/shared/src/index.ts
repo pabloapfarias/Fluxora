@@ -1721,6 +1721,82 @@ export type ProviderEventPayload =
   | ProviderUpdatedPayload
   | ProviderRemovedPayload;
 
+// ============================================================================
+// PR 008 — Mission Engine inicial
+// ============================================================================
+//
+// Define o vocabulário novo para missões no FluxoraV1. A UI
+// atual ainda consome `WorkflowRun` / `WorkflowEvent` (legado
+// do mock) e o `desktopBridge` faz a adaptação entre as duas
+// superfícies. Componentes novos podem usar `MissionRun` /
+// `MissionLog` diretamente via `window.fluxora.missions.*`.
+
+/** Estados possíveis de uma missão em runtime. */
+export type MissionStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+/** Fases observáveis do Mission Engine durante a execução. */
+export type MissionPhase =
+  | "created"
+  | "context"
+  | "planning"
+  | "provider-call"
+  | "response"
+  | "final-report"
+  | "failed";
+
+/** Modo de execução da missão. */
+export type MissionMode = "assistido" | "propositivo" | "piloto-automatico";
+
+/** Modelo de missão persistido no backend. */
+export interface MissionRun {
+  id: string;
+  projectId: string;
+  title: string;
+  prompt: string;
+  status: MissionStatus;
+  mode: MissionMode;
+  providerId?: string;
+  model?: string;
+  currentPhase?: MissionPhase;
+  resultText?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+/** Linha de log/fase persistida para uma missão. */
+export interface MissionLog {
+  id: string;
+  missionId: string;
+  timestamp: string;
+  level: "debug" | "info" | "warn" | "error";
+  message: string;
+  phase?: MissionPhase;
+  payload?: unknown;
+}
+
+/** Input aceito por `missions_create` / `missions_create_and_run`. */
+export interface CreateMissionInput {
+  projectId: string;
+  prompt: string;
+  title?: string;
+  providerId?: string;
+  model?: string;
+  mode?: MissionMode;
+}
+
+/** Input aceito por `missions_run`. */
+export interface RunMissionInput {
+  missionId: string;
+}
+
 // IPC API types
 export interface FluxoraAPI {
   projects: {
@@ -1752,6 +1828,39 @@ export interface FluxoraAPI {
     rejectFinal(id: string, note?: string): Promise<Approval>;
     getStepOutputs(workflowRunId: string): Promise<AgentStepOutput[]>;
     listAgentOutputs(workflowRunId: string): Promise<AgentStepOutput[]>;
+  };
+  // ============================================================================
+  // PR 008 — Mission Engine próprio (superfície canônica nova)
+  // ============================================================================
+  //
+  // Esta superfície coexiste com `workflows.*` (legado). O
+  // `desktopBridge` faz a adaptação: chamadas `workflows.create` /
+  // `workflows.list` / `workflows.get` / `workflows.simulate` /
+  // `workflows.runReal` / `workflows.runRealAsync` / `workflows.rerun`
+  // são redirecionadas para os comandos `missions_*` quando em
+  // runtime Tauri, convertendo os tipos conforme necessário. Os
+  // métodos `workflows.approveFinal` / `rejectFinal` permanecem
+  // mockados nesta PR (sem aprovação real, sem patch real).
+  //
+  // Componentes novos podem consumir `window.fluxora.missions.*`
+  // diretamente para evitar a camada de adaptação.
+  missions: {
+    /** Health-check do Mission Engine. */
+    ping(): Promise<string>;
+    /** Lista missões persistidas (mais recentes primeiro). */
+    list(): Promise<MissionRun[]>;
+    /** Retorna uma missão por `id` (ou `null` se não existir). */
+    get(missionId: string): Promise<MissionRun | null>;
+    /** Cria uma missão (status inicial: "queued"). */
+    create(input: CreateMissionInput): Promise<MissionRun>;
+    /** Executa uma missão já criada. Atualiza o status persistido. */
+    run(input: RunMissionInput): Promise<MissionRun>;
+    /** Cria e executa uma missão em uma única chamada. */
+    createAndRun(input: CreateMissionInput): Promise<MissionRun>;
+    /** Lista logs/fases de uma missão (ordenados por timestamp crescente). */
+    listLogs(missionId: string): Promise<MissionLog[]>;
+    /** Limpa o arquivo de missões (apenas dev/debug). */
+    clear(): Promise<void>;
   };
   approvals: {
     listActionable(): Promise<Approval[]>;

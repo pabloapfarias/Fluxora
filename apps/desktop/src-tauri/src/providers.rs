@@ -41,13 +41,18 @@ use crate::events;
 const DEFAULT_PROBE_TIMEOUT_MS: u64 = 8_000;
 
 /// Timeout padrão para `providers_chat_once` (chamada simples).
-const DEFAULT_CHAT_TIMEOUT_MS: u64 = 60_000;
+pub const DEFAULT_CHAT_TIMEOUT_MS: u64 = 60_000;
+
+/// Timeout do chat invocado pelo Mission Engine (PR 008). É
+/// ligeiramente mais alto que o do provider direto para acomodar
+/// missões maiores (contexto do projeto + prompt).
+pub const MISSION_CHAT_TIMEOUT_MS: u64 = 90_000;
 
 /// Tamanho máximo de mensagem de erro exposto em eventos/resultados.
 const MAX_ERROR_MESSAGE_LEN: usize = 500;
 
 /// Hard cap para `max_tokens` aceito pelo backend.
-const HARD_MAX_TOKENS: u32 = 32_000;
+pub const HARD_MAX_TOKENS: u32 = 32_000;
 
 /// Lista canônica de `kind` reconhecidos. Usada para validação
 /// leve. Adicionar novos valores requer suporte real no adapter.
@@ -64,7 +69,7 @@ const VALID_KINDS: &[&str] = &[
 
 /// Lista de `kind` com implementação real nesta PR. Apenas
 /// `openai-compatible`. Outros retornam erro claro.
-const SUPPORTED_KINDS: &[&str] = &["openai-compatible", "local"];
+pub const SUPPORTED_KINDS: &[&str] = &["openai-compatible", "local"];
 
 // ---------------------------------------------------------------------------
 // Modelo de dados
@@ -245,7 +250,7 @@ pub fn load_providers_on_startup<R: tauri::Runtime>(app: &AppHandle<R>) {
 /// nome de env var ou chave literal). Mesma semântica da PR 006
 /// (voice) — refatoração para helper compartilhado fica para PR
 /// futura.
-fn resolve_api_key(
+pub(crate) fn resolve_api_key(
     api_key_env: &Option<String>,
     api_key_optional: bool,
 ) -> Result<Option<String>, String> {
@@ -306,6 +311,13 @@ fn normalize_kind(kind: &str) -> String {
 
 fn is_supported_kind(kind: &str) -> bool {
     SUPPORTED_KINDS.contains(&kind)
+}
+
+/// Variante pública de `is_supported_kind` usada por módulos
+/// vizinhos (Mission Engine) para decidir se um provider
+/// pode ser invocado.
+pub fn provider_kind_is_supported(kind: &str) -> bool {
+    is_supported_kind(kind)
 }
 
 fn generate_provider_id() -> String {
@@ -1182,6 +1194,109 @@ fn default_base_url_for_kind(kind: &str) -> Option<String> {
         None
     } else {
         None
+    }
+}
+
+/// Resultado de `execute_mission_chat` — usado pelo Mission
+/// Engine (PR 008) para chamar o adapter OpenAI-compatible
+/// **sem** emitir eventos `provider/*`. O Mission Engine emite
+/// seus próprios `mission/phase` events; duplicar os dois
+/// barulhos polui o barramento.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionChatResult {
+    pub text: String,
+    pub model: String,
+    pub provider_id: String,
+    pub provider_name: String,
+    pub duration_ms: u64,
+    pub usage: Option<serde_json::Value>,
+}
+
+/// Helper público invocado pelo Mission Engine (PR 008) para
+/// fazer uma chamada de chat com o adapter OpenAI-compatible
+/// sem emitir `provider/*` events. Faz o mesmo trabalho de
+/// `providers_chat_once`, mas com timeout mais alto
+/// (`MISSION_CHAT_TIMEOUT_MS`) e `max_tokens` configurável.
+///
+/// Retorna `Err(String)` com mensagem já sanitizada (sem
+/// chaves em claro, body truncado em 500 chars) para que o
+/// Mission Engine possa exibi-la ao usuário.
+pub fn execute_mission_chat(
+    app: &AppHandle,
+    provider_id: &str,
+    model: &str,
+    messages: &[ChatMessagePayload],
+    max_tokens: Option<u32>,
+) -> Result<MissionChatResult, String> {
+    let state = app.state::<ProvidersState>();
+    let provider = state
+        .snapshot()
+        .into_iter()
+        .find(|p| p.id == provider_id)
+        .ok_or_else(|| format!("Provider {provider_id} não encontrado."))?;
+
+    if !provider.enabled {
+        return Err("Provider desabilitado.".to_string());
+    }
+    if !is_supported_kind(&provider.kind) {
+        return Err(format!(
+            "Provider '{}' ainda não implementado nesta PR. Suportados: {}.",
+            provider.kind,
+            SUPPORTED_KINDS.join(", ")
+        ));
+    }
+
+    let base_url = validate_base_url(
+        &provider
+            .base_url
+            .clone()
+            .or_else(|| default_base_url_for_kind(&provider.kind)),
+    )
+    .map_err(|e| e.message())?;
+    let api_key = resolve_api_key(&provider.api_key_env, false).map_err(|e| e)?;
+    let max_tokens = max_tokens
+        .map(|v| v.min(HARD_MAX_TOKENS).max(1))
+        .or(Some(1024));
+
+    let started = Instant::now();
+    let result = openai_chat_once(
+        &base_url,
+        api_key.as_deref(),
+        model,
+        messages,
+        Some(0.7_f32),
+        max_tokens,
+        Duration::from_millis(MISSION_CHAT_TIMEOUT_MS),
+    );
+    let elapsed = started.elapsed().as_millis() as u64;
+
+    match result {
+        Ok((text, usage)) => Ok(MissionChatResult {
+            text,
+            model: model.to_string(),
+            provider_id: provider.id.clone(),
+            provider_name: provider.name.clone(),
+            duration_ms: elapsed,
+            usage,
+        }),
+        Err(err) => {
+            let msg = truncate_error_message(&err.message());
+            // Log com chave mascarada (se houver) para diagnóstico.
+            if let Some(key) = &api_key {
+                eprintln!(
+                    "[fluxora providers] mission chat falhou base_url={base_url} key={} code={} msg={msg}",
+                    mask_api_key(key),
+                    err.code()
+                );
+            } else {
+                eprintln!(
+                    "[fluxora providers] mission chat falhou base_url={base_url} code={} msg={msg}",
+                    err.code()
+                );
+            }
+            Err(msg)
+        }
     }
 }
 

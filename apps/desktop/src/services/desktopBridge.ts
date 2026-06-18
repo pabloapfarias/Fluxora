@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AgentStepOutput,
   AiModelInfo,
   AiProviderConfig,
   AudioProviderSettings,
@@ -9,20 +10,29 @@ import type {
   AudioTranscriptionResult,
   ChatOnceRequest,
   ChatOnceResult,
+  CreateMissionInput,
   CreateProjectInput,
   FluxoraAPI,
   FluxoraEvent,
   FluxoraEventLevel,
   FluxoraEventSource,
   GitInspectionResult,
+  MissionLog,
+  MissionRun,
+  MissionStatus,
   OpenCodeCatalogResult,
   OpenCodeModel,
   OpenCodeProvider,
   Project,
   ProviderTestResult,
+  RunMissionInput,
   SelectDirectoryResult,
   UpdateProjectInput,
   ValidatePathResult,
+  WorkflowEvent,
+  WorkflowRun,
+  WorkflowRunDetail,
+  WorkflowRunStatus,
 } from "@fluxora/shared";
 import { createMockAPI } from "../api/mock-api";
 
@@ -652,6 +662,225 @@ const DEFAULT_AUDIO_RETENTION: AudioRetentionSettings = {
 };
 
 // ---------------------------------------------------------------------------
+// Missions (PR 008)
+// ---------------------------------------------------------------------------
+//
+// Esta seção implementa a ponte entre a UI legada
+// (`window.fluxora.workflows.*` consumindo `WorkflowRun` /
+// `WorkflowEvent`) e o novo Mission Engine em Rust/Tauri
+// (`MissionRun` / `MissionLog`). Em runtime Tauri:
+//
+// - `window.fluxora.missions.*` é a superfície canônica nova
+//   (chama diretamente `missions_*`).
+// - `window.fluxora.workflows.*` é adaptado para a nova engine
+//   via `toWorkflowRun` / `toWorkflowEvent` (sem alterar a UI).
+// - `window.fluxora.events.list(workflowRunId)` também é
+//   adaptado (lê `missions_list_logs`).
+//
+// Fora do runtime Tauri (browser/Vite dev), tudo cai no mock
+// legado (que não tem Mission Engine real — apenas stubs).
+//
+// Os métodos `workflows.approveFinal` / `workflows.rejectFinal`
+// permanecem mockados nesta PR: não há aprovação real nem patch
+// aplicado (ver PR 009 para piloto automático).
+
+// ---------------------------------------------------------------------------
+// Conversores MissionRun ↔ WorkflowRun
+// ---------------------------------------------------------------------------
+
+const MISSION_STATUS_TO_WORKFLOW: Record<MissionStatus, WorkflowRunStatus> = {
+  queued: "approved",
+  running: "running",
+  completed: "completed",
+  failed: "failed",
+  cancelled: "cancelled",
+};
+
+function toWorkflowRun(mission: MissionRun): WorkflowRun {
+  return {
+    id: mission.id,
+    projectId: mission.projectId,
+    title: mission.title,
+    prompt: mission.prompt,
+    generatedContext: JSON.stringify({
+      kind: "mission-run",
+      mode: mission.mode,
+      providerId: mission.providerId,
+      model: mission.model,
+      currentPhase: mission.currentPhase,
+      error: mission.error,
+    }, null, 2),
+    status: MISSION_STATUS_TO_WORKFLOW[mission.status] ?? "running",
+    currentStepId: mission.currentPhase
+      ? `step-${mission.currentPhase}`
+      : undefined,
+    executionMode: "real",
+    realStrategy: "single",
+    createdAt: mission.createdAt,
+    updatedAt: mission.updatedAt,
+    completedAt: mission.completedAt,
+  };
+}
+
+function toWorkflowEvent(
+  log: MissionLog,
+  workflowRunId: string,
+): WorkflowEvent {
+  return {
+    id: log.id,
+    workflowRunId,
+    projectId: undefined,
+    type: log.phase ?? "log",
+    message: log.message,
+    metadata: log.payload !== undefined ? JSON.stringify(log.payload) : undefined,
+    createdAt: log.timestamp,
+  };
+}
+
+/**
+ * Constrói 3 `AgentStepOutput` sintéticos a partir dos logs
+ * persistidos de uma missão. A UI atual espera
+ * `getStepOutputs(workflowRunId)` retornando algo nessa
+ * forma — então derivamos Planner / Provider Call / Final Report
+ * com status/timing baseados nos logs reais.
+ */
+function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStepOutput[] {
+  const findFirstTimestamp = (predicate: (log: MissionLog) => boolean): string | undefined => {
+    for (const log of logs) {
+      if (predicate(log)) return log.timestamp;
+    }
+    return undefined;
+  };
+
+  const findLastTimestamp = (predicate: (log: MissionLog) => boolean): string | undefined => {
+    let last: string | undefined;
+    for (const log of logs) {
+      if (predicate(log)) last = log.timestamp;
+    }
+    return last;
+  };
+
+  const isPhase = (phase: string) => (log: MissionLog) => log.phase === phase;
+  const isFailed = (log: MissionLog) =>
+    log.phase === "failed" || log.level === "error" || mission.status === "failed";
+
+  const plannerStarted = findFirstTimestamp(isPhase("context")) ?? mission.startedAt;
+  const plannerCompleted =
+    findFirstTimestamp(isPhase("planning")) ?? plannerStarted;
+  const providerStarted =
+    findFirstTimestamp(isPhase("provider-call")) ?? plannerCompleted;
+  const providerCompleted =
+    findFirstTimestamp(isPhase("response")) ?? providerStarted;
+  const finalReportStarted =
+    findFirstTimestamp(isPhase("final-report")) ?? providerCompleted;
+  const finalReportCompleted =
+    mission.completedAt ?? finalReportStarted;
+
+  const isMissionFailed = mission.status === "failed";
+
+  return [
+    {
+      id: `${mission.id}-step-planner`,
+      workflowRunId: mission.id,
+      projectId: mission.projectId,
+      stepId: "step-planner",
+      agentRole: "planner",
+      agentName: "Planner",
+      prompt: mission.prompt,
+      output: logs
+        .filter((l) => l.phase === "context" || l.phase === "planning")
+        .map((l) => l.message)
+        .join("\n"),
+      parsedOutput: undefined,
+      status: isMissionFailed && !plannerCompleted ? "failed" : "completed",
+      startedAt: plannerStarted ?? mission.createdAt,
+      completedAt: plannerCompleted ?? plannerStarted,
+    },
+    {
+      id: `${mission.id}-step-provider`,
+      workflowRunId: mission.id,
+      projectId: mission.projectId,
+      stepId: "step-provider",
+      agentRole: "developer",
+      agentName: "Provider Call",
+      prompt: mission.prompt,
+      output: logs
+        .filter((l) => l.phase === "provider-call" || l.phase === "response")
+        .map((l) => l.message)
+        .join("\n"),
+      parsedOutput: undefined,
+      status: isMissionFailed && !providerCompleted ? "failed" : "completed",
+      startedAt: providerStarted ?? plannerCompleted ?? mission.startedAt ?? mission.createdAt,
+      completedAt: providerCompleted ?? providerStarted,
+    },
+    {
+      id: `${mission.id}-step-finalization`,
+      workflowRunId: mission.id,
+      projectId: mission.projectId,
+      stepId: "step-finalization",
+      agentRole: "qa",
+      agentName: "Final Report",
+      prompt: mission.prompt,
+      output: mission.resultText ?? logs
+        .filter((l) => l.phase === "final-report" || l.phase === "failed")
+        .map((l) => l.message)
+        .join("\n"),
+      parsedOutput: undefined,
+      status: isMissionFailed
+        ? (isFailed(logs[logs.length - 1] ?? { phase: undefined, level: "info" } as MissionLog) ? "failed" : "completed")
+        : "completed",
+      startedAt: finalReportStarted ?? providerCompleted ?? mission.startedAt ?? mission.createdAt,
+      completedAt: finalReportCompleted ?? finalReportStarted,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Helpers de baixo nível
+// ---------------------------------------------------------------------------
+
+/** Lista missões via backend Tauri (ou [] se fora do runtime). */
+async function listMissions(): Promise<MissionRun[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<MissionRun[]>("missions_list", {});
+  } catch (error) {
+    console.warn("[desktopBridge] missions_list falhou, usando []", error);
+    return [];
+  }
+}
+
+async function getMissionById(id: string): Promise<MissionRun | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<MissionRun | null>("missions_get", { id });
+  } catch (error) {
+    console.warn("[desktopBridge] missions_get falhou", error);
+    return null;
+  }
+}
+
+async function listMissionLogs(missionId: string): Promise<MissionLog[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<MissionLog[]>("missions_list_logs", { missionId });
+  } catch (error) {
+    console.warn("[desktopBridge] missions_list_logs falhou", error);
+    return [];
+  }
+}
+
+async function runMissionInternal(input: RunMissionInput): Promise<MissionRun> {
+  return await invoke<MissionRun>("missions_run", { payload: input });
+}
+
+async function createAndRunMissionInternal(
+  input: CreateMissionInput,
+): Promise<MissionRun> {
+  return await invoke<MissionRun>("missions_create_and_run", { payload: input });
+}
+
+// ---------------------------------------------------------------------------
 // Providers (PR 007)
 // ---------------------------------------------------------------------------
 //
@@ -930,6 +1159,241 @@ export function createDesktopBridge(): FluxoraAPI {
 
   return {
     ...mock,
+    // PR 008 — Mission Engine (superfície canônica nova).
+    // Em runtime Tauri, delega para os comandos `missions_*`.
+    // Fora do runtime Tauri, cai no fallback do `mock-api.ts`
+    // (que devolve stubs sem execução real).
+    missions: {
+      ping(): Promise<string> {
+        if (isTauriRuntime()) {
+          return invoke<string>("missions_ping", {});
+        }
+        return mock.missions.ping();
+      },
+      async list(): Promise<MissionRun[]> {
+        if (isTauriRuntime()) {
+          try {
+            return await listMissions();
+          } catch (error) {
+            console.warn("[desktopBridge] missions_list falhou, usando mock", error);
+          }
+        }
+        return mock.missions.list();
+      },
+      async get(missionId: string): Promise<MissionRun | null> {
+        if (isTauriRuntime()) {
+          try {
+            return await getMissionById(missionId);
+          } catch (error) {
+            console.warn("[desktopBridge] missions_get falhou, usando mock", error);
+          }
+        }
+        return mock.missions.get(missionId);
+      },
+      async create(input: CreateMissionInput): Promise<MissionRun> {
+        if (isTauriRuntime()) {
+          return await invoke<MissionRun>("missions_create", { payload: input });
+        }
+        return mock.missions.create(input);
+      },
+      async run(input: RunMissionInput): Promise<MissionRun> {
+        if (isTauriRuntime()) {
+          return await runMissionInternal(input);
+        }
+        return mock.missions.run(input);
+      },
+      async createAndRun(input: CreateMissionInput): Promise<MissionRun> {
+        if (isTauriRuntime()) {
+          return await createAndRunMissionInternal(input);
+        }
+        return mock.missions.createAndRun(input);
+      },
+      async listLogs(missionId: string): Promise<MissionLog[]> {
+        if (isTauriRuntime()) {
+          try {
+            return await listMissionLogs(missionId);
+          } catch (error) {
+            console.warn("[desktopBridge] missions_list_logs falhou, usando mock", error);
+          }
+        }
+        return mock.missions.listLogs(missionId);
+      },
+      async clear(): Promise<void> {
+        if (isTauriRuntime()) {
+          await invoke("missions_clear", {});
+        }
+        return mock.missions.clear();
+      },
+    },
+    // PR 008 — `workflows.*` agora é adaptado para o Mission
+    // Engine em runtime Tauri. A UI atual continua consumindo
+    // `window.fluxora.workflows.*` exatamente como antes; o
+    // `desktopBridge` faz a conversão `MissionRun` ↔ `WorkflowRun`
+    // e `MissionLog` ↔ `WorkflowEvent`. Métodos de aprovação
+    // final continuam mock (sem patch real nesta PR).
+    workflows: {
+      async list(): Promise<WorkflowRun[]> {
+        if (isTauriRuntime()) {
+          try {
+            const missions = await listMissions();
+            return missions.map(toWorkflowRun);
+          } catch (error) {
+            console.warn("[desktopBridge] workflows.list falhou, usando mock", error);
+          }
+        }
+        return mock.workflows.list();
+      },
+      async create(input: any): Promise<WorkflowRun> {
+        if (isTauriRuntime()) {
+          // Extrai campos do `CreateWorkflowInput` legado e
+          // cria+executa uma missão real. O `executionMode` e
+          // `realStrategy` do input são ignorados nesta PR (o
+          // Mission Engine é sempre modo real/propositivo,
+          // single agent).
+          const prompt: string = input?.prompt ?? "";
+          const projectId: string | undefined =
+            input?.projectId ?? input?.generatedContext?.activeProject?.id;
+          if (!prompt.trim()) {
+            throw new Error("O prompt da missão não pode estar vazio.");
+          }
+          if (!projectId) {
+            throw new Error("A missão precisa estar vinculada a um projeto.");
+          }
+          const missionInput: CreateMissionInput = {
+            projectId,
+            prompt,
+            title: input?.title,
+            mode: "propositivo",
+          };
+          const mission = await createAndRunMissionInternal(missionInput);
+          return toWorkflowRun(mission);
+        }
+        return mock.workflows.create(input);
+      },
+      async get(id: string): Promise<WorkflowRunDetail> {
+        if (isTauriRuntime()) {
+          try {
+            const mission = await getMissionById(id);
+            if (!mission) {
+              throw new Error("Not found");
+            }
+            const logs = await listMissionLogs(id);
+            const base = toWorkflowRun(mission);
+            return {
+              ...base,
+              steps: buildSyntheticSteps(mission, logs) as any,
+              events: logs.map((log) => toWorkflowEvent(log, id)),
+            } as WorkflowRunDetail;
+          } catch (error) {
+            console.warn("[desktopBridge] workflows.get falhou, usando mock", error);
+          }
+        }
+        return mock.workflows.get(id);
+      },
+      async simulate(id: string): Promise<void> {
+        if (isTauriRuntime()) {
+          await runMissionInternal({ missionId: id });
+          return;
+        }
+        return mock.workflows.simulate(id);
+      },
+      async runReal(id: string): Promise<void> {
+        if (isTauriRuntime()) {
+          await runMissionInternal({ missionId: id });
+          return;
+        }
+        return mock.workflows.runReal(id);
+      },
+      async runRealAsync(id: string): Promise<{ jobId: string; workflowRunId: string }> {
+        if (isTauriRuntime()) {
+          // Nesta PR, missões são síncronas — disparamos e
+          // devolvemos um `jobId` sintético para a UI.
+          const jobId = `job-${id}-${Date.now()}`;
+          void runMissionInternal({ missionId: id });
+          return { jobId, workflowRunId: id };
+        }
+        return mock.workflows.runRealAsync(id);
+      },
+      async rerun(workflowRunId: string, overrides?: any): Promise<{ jobId: string; workflowRunId: string }> {
+        if (isTauriRuntime()) {
+          const original = await getMissionById(workflowRunId);
+          if (!original) {
+            throw new Error("Missão original não encontrada");
+          }
+          const prompt: string = overrides?.prompt?.trim() || original.prompt;
+          const missionInput: CreateMissionInput = {
+            projectId: original.projectId,
+            prompt,
+            title: original.title,
+            mode: "propositivo",
+          };
+          const next = await createAndRunMissionInternal(missionInput);
+          return {
+            jobId: `job-${next.id}-${Date.now()}`,
+            workflowRunId: next.id,
+          };
+        }
+        return mock.workflows.rerun(workflowRunId, overrides);
+      },
+      async getJob(jobId: string): Promise<any> {
+        if (isTauriRuntime()) {
+          // Sem scheduler real nesta PR — jobs são sempre
+          // síncronos. Devolvemos `null` (a UI trata como
+          // "job já concluído" e refaz a busca pela missão).
+          return null;
+        }
+        return mock.workflows.getJob(jobId);
+      },
+      async listJobs(): Promise<any[]> {
+        if (isTauriRuntime()) {
+          // Sem scheduler real nesta PR — `listJobs` devolve
+          // [] para a UI tratar a última missão como ativa
+          // via `workflows.list` + `events.list`.
+          return [];
+        }
+        return mock.workflows.listJobs();
+      },
+      async cancelJob(_jobId: string): Promise<void> {
+        // Sem cancelamento real nesta PR (missões são síncronas
+        // e já concluem rapidamente).
+        return;
+      },
+      async approveFinal(_id: string): Promise<any> {
+        // Sem aprovação real nesta PR (sem patch aplicado).
+        // Mantém mock para a UI não quebrar.
+        return mock.workflows.approveFinal(_id);
+      },
+      async rejectFinal(_id: string, _note?: string): Promise<any> {
+        // Sem rejeição real nesta PR.
+        return mock.workflows.rejectFinal(_id, _note);
+      },
+      async getStepOutputs(workflowRunId: string): Promise<AgentStepOutput[]> {
+        if (isTauriRuntime()) {
+          try {
+            const mission = await getMissionById(workflowRunId);
+            if (!mission) return [];
+            const logs = await listMissionLogs(workflowRunId);
+            return buildSyntheticSteps(mission, logs);
+          } catch (error) {
+            console.warn("[desktopBridge] workflows.getStepOutputs falhou, usando mock", error);
+          }
+        }
+        return mock.workflows.getStepOutputs(workflowRunId);
+      },
+      async listAgentOutputs(workflowRunId: string): Promise<AgentStepOutput[]> {
+        if (isTauriRuntime()) {
+          try {
+            const mission = await getMissionById(workflowRunId);
+            if (!mission) return [];
+            const logs = await listMissionLogs(workflowRunId);
+            return buildSyntheticSteps(mission, logs);
+          } catch (error) {
+            console.warn("[desktopBridge] workflows.listAgentOutputs falhou, usando mock", error);
+          }
+        }
+        return mock.workflows.listAgentOutputs(workflowRunId);
+      },
+    },
     providers: {
       // PR 007 — Provider Engine próprio. Em runtime Tauri,
       // delega para o backend Rust. Fora, cai no mock
@@ -1011,12 +1475,23 @@ export function createDesktopBridge(): FluxoraAPI {
       fileDiff: mock.git.fileDiff.bind(mock.git),
     },
     events: {
-      // PR 005 — Os métodos legados (`list`, `onWorkflowEvent`,
-      // `onJobUpdated`, `onApprovalChange`, `onOpenCodeStdout/Stderr/
-      // JsonEvent`) permanecem exatamente como estavam no mock. Eles
-      // só funcionam porque o Mission Engine gera os eventos; fora
-      // do Electron/Tauri, o mock os simula localmente.
-      list: mock.events.list.bind(mock.events),
+      // PR 008 — `events.list(workflowRunId)` agora delega para
+      // `missions_list_logs(missionId)` em runtime Tauri,
+      // convertendo `MissionLog` → `WorkflowEvent`. A UI
+      // continua consumindo `events.list` como antes — o
+      // contrato externo (assinatura + tipo de retorno)
+      // permanece idêntico.
+      async list(workflowRunId?: string): Promise<WorkflowEvent[]> {
+        if (isTauriRuntime() && workflowRunId) {
+          try {
+            const logs = await listMissionLogs(workflowRunId);
+            return logs.map((log) => toWorkflowEvent(log, workflowRunId));
+          } catch (error) {
+            console.warn("[desktopBridge] events.list falhou, usando mock", error);
+          }
+        }
+        return mock.events.list(workflowRunId);
+      },
       onWorkflowEvent: mock.events.onWorkflowEvent.bind(mock.events),
       onJobUpdated: mock.events.onJobUpdated.bind(mock.events),
       onApprovalChange: mock.events.onApprovalChange.bind(mock.events),

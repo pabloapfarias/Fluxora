@@ -1,6 +1,7 @@
 mod events;
 mod filesystem;
 mod git;
+mod missions;
 mod projects;
 mod providers;
 mod voice;
@@ -14,6 +15,7 @@ use filesystem::{
 use git::{
     GitAppInfo, GitChangedFile, GitCommitInfo, GitCommitsOptions, GitSummary,
 };
+use missions::{CreateMissionPayload, MissionLogRecord, MissionRecord, RunMissionPayload};
 use projects::{CreateProjectPayload, SelectDirectoryResult, UpdateProjectPayload};
 use providers::{
     ChatOncePayload, ChatOnceResultPayload, CreateProviderPayload, ProviderTestResultPayload,
@@ -361,6 +363,62 @@ fn providers_chat_once(
     providers::providers_chat_once(app, payload)
 }
 
+// ---------------------------------------------------------------------------
+// Missions (PR 008)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn missions_ping() -> String {
+    missions::missions_ping()
+}
+
+#[tauri::command]
+fn missions_list(app: AppHandle) -> Result<Vec<MissionRecord>, String> {
+    missions::missions_list(app)
+}
+
+#[tauri::command]
+fn missions_get(app: AppHandle, id: String) -> Result<Option<MissionRecord>, String> {
+    missions::missions_get(app, id)
+}
+
+#[tauri::command]
+fn missions_create(
+    app: AppHandle,
+    payload: CreateMissionPayload,
+) -> Result<MissionRecord, String> {
+    missions::missions_create(app, payload)
+}
+
+#[tauri::command]
+fn missions_run(
+    app: AppHandle,
+    payload: RunMissionPayload,
+) -> Result<MissionRecord, String> {
+    missions::missions_run(app, payload)
+}
+
+#[tauri::command]
+fn missions_create_and_run(
+    app: AppHandle,
+    payload: CreateMissionPayload,
+) -> Result<MissionRecord, String> {
+    missions::missions_create_and_run(app, payload)
+}
+
+#[tauri::command]
+fn missions_list_logs(
+    app: AppHandle,
+    mission_id: String,
+) -> Result<Vec<MissionLogRecord>, String> {
+    missions::missions_list_logs(app, mission_id)
+}
+
+#[tauri::command]
+fn missions_clear(app: AppHandle) -> Result<(), String> {
+    missions::missions_clear(app)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -368,6 +426,7 @@ pub fn run() {
         .manage(AppEventsState::new())
         .manage(VoiceState::new())
         .manage(providers::ProvidersState::new())
+        .manage(missions::MissionsState::new())
         .setup(|app| {
             // PR 006 — Carrega `voice.json` salvo no app data dir.
             // Falhas de I/O são logadas e descartadas; o app
@@ -378,6 +437,10 @@ pub fn run() {
             // PR 007 — Carrega `providers.json` salvo no app data
             // dir. Mesma estratégia de tolerância a falhas.
             providers::load_providers_on_startup(&handle);
+
+            // PR 008 — Carrega `missions.json` salvo no app data
+            // dir. Mesma estratégia de tolerância a falhas.
+            missions::load_missions_on_startup(&handle);
 
             // Emite o evento `app/ready` no barramento assim que o
             // shell Tauri está pronto. Este é o primeiro evento real
@@ -437,7 +500,15 @@ pub fn run() {
             providers_remove,
             providers_test,
             providers_list_models,
-            providers_chat_once
+            providers_chat_once,
+            missions_ping,
+            missions_list,
+            missions_get,
+            missions_create,
+            missions_run,
+            missions_create_and_run,
+            missions_list_logs,
+            missions_clear
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
