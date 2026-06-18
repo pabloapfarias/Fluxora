@@ -1519,6 +1519,208 @@ export interface FluxoraEvent {
   payload?: unknown;
 }
 
+// ============================================================================
+// PR 007 — Provider Engine próprio
+// ============================================================================
+//
+// Tipos do motor de providers do FluxoraV1. Substitui a dependência
+// conceitual do OpenCode CLI como intermediário para chamadas a
+// provedores de IA. A UI atual continua consumindo os tipos
+// `OpenCode*` legados para `getCatalog` etc.; este bloco adiciona
+// a superfície nova (`AiProviderConfig`, `AiModelInfo`, etc.) sem
+// duplicar tipos existentes.
+
+/** Tipos de provider reconhecidos pelo Provider Engine. */
+export type ProviderKind =
+  | "openai-compatible"
+  | "anthropic"
+  | "gemini"
+  | "mistral"
+  | "deepseek"
+  | "minimax"
+  | "local"
+  | "custom";
+
+/** Estados possíveis de um provider configurado. */
+export type ProviderStatus =
+  | "configured"
+  | "missing-api-key"
+  | "invalid"
+  | "unreachable"
+  | "disabled";
+
+/** Capacidades suportadas por um provider/modelo. */
+export interface ProviderCapabilities {
+  supportsStreaming?: boolean;
+  supportsTools?: boolean;
+  supportsVision?: boolean;
+  supportsAudio?: boolean;
+}
+
+/** Configuração persistida de um provider no Provider Engine. */
+export interface AiProviderConfig {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  /** URL base do endpoint. Para OpenAI-compatible: ex. https://api.openai.com/v1 */
+  baseUrl?: string;
+  /**
+   * Nome de variável de ambiente (`OPENAI_API_KEY`) ou chave literal.
+   * Por compatibilidade com a PR 006, ambos formatos são aceitos.
+   * Não é exposto em eventos nem logs.
+   */
+  apiKeyEnv?: string;
+  /** Modelo padrão sugerido para o provider. */
+  defaultModel?: string;
+  enabled: boolean;
+  capabilities?: ProviderCapabilities;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Modelo exposto por um provider (ex.: "gpt-4o-mini"). */
+export interface AiModelInfo {
+  id: string;
+  providerId: string;
+  name: string;
+  displayName?: string;
+  contextWindow?: number;
+  supportsStreaming?: boolean;
+  supportsTools?: boolean;
+  supportsVision?: boolean;
+  supportsAudio?: boolean;
+}
+
+/** Resultado de `providers_test`. */
+export interface ProviderTestResult {
+  ok: boolean;
+  providerId?: string;
+  status: ProviderStatus;
+  message?: string;
+  durationMs?: number;
+  models?: AiModelInfo[];
+}
+
+/** Mensagem de chat (papel + conteúdo). */
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+/** Request para `providers_chat_once` (fundação técnica; o chat real fica para o Mission Engine). */
+export interface ChatOnceRequest {
+  providerId: string;
+  model?: string;
+  messages: ChatMessage[];
+  temperature?: number;
+  maxTokens?: number;
+}
+
+/** Response de `providers_chat_once`. */
+export interface ChatOnceResult {
+  text: string;
+  model?: string;
+  providerId: string;
+  durationMs: number;
+  usage?: unknown;
+}
+
+/** Payload discriminado dos eventos `provider/*` no barramento. */
+export type ProviderEventType =
+  | "provider/test-started"
+  | "provider/test-completed"
+  | "provider/test-failed"
+  | "provider/models-loaded"
+  | "provider/request-started"
+  | "provider/request-completed"
+  | "provider/request-failed"
+  | "provider/settings-updated"
+  | "provider/created"
+  | "provider/updated"
+  | "provider/removed";
+
+export interface ProviderEventBase {
+  kind: ProviderEventType;
+  providerId?: string;
+  providerName?: string;
+  kind2?: ProviderKind;
+}
+
+export interface ProviderTestStartedPayload extends ProviderEventBase {
+  kind: "provider/test-started";
+}
+
+export interface ProviderTestCompletedPayload extends ProviderEventBase {
+  kind: "provider/test-completed";
+  ok: boolean;
+  durationMs: number;
+  modelsCount?: number;
+  status: ProviderStatus;
+}
+
+export interface ProviderTestFailedPayload extends ProviderEventBase {
+  kind: "provider/test-failed";
+  durationMs: number;
+  errorCode: string;
+  errorMessage: string;
+}
+
+export interface ProviderModelsLoadedPayload extends ProviderEventBase {
+  kind: "provider/models-loaded";
+  modelsCount: number;
+  durationMs: number;
+}
+
+export interface ProviderRequestStartedPayload extends ProviderEventBase {
+  kind: "provider/request-started";
+  model?: string;
+  messageCount: number;
+}
+
+export interface ProviderRequestCompletedPayload extends ProviderEventBase {
+  kind: "provider/request-completed";
+  model?: string;
+  durationMs: number;
+  textLength: number;
+}
+
+export interface ProviderRequestFailedPayload extends ProviderEventBase {
+  kind: "provider/request-failed";
+  model?: string;
+  durationMs: number;
+  errorCode: string;
+  errorMessage: string;
+}
+
+export interface ProviderSettingsUpdatedPayload extends ProviderEventBase {
+  kind: "provider/settings-updated";
+}
+
+export interface ProviderCreatedPayload extends ProviderEventBase {
+  kind: "provider/created";
+}
+
+export interface ProviderUpdatedPayload extends ProviderEventBase {
+  kind: "provider/updated";
+}
+
+export interface ProviderRemovedPayload extends ProviderEventBase {
+  kind: "provider/removed";
+}
+
+export type ProviderEventPayload =
+  | ProviderTestStartedPayload
+  | ProviderTestCompletedPayload
+  | ProviderTestFailedPayload
+  | ProviderModelsLoadedPayload
+  | ProviderRequestStartedPayload
+  | ProviderRequestCompletedPayload
+  | ProviderRequestFailedPayload
+  | ProviderSettingsUpdatedPayload
+  | ProviderCreatedPayload
+  | ProviderUpdatedPayload
+  | ProviderRemovedPayload;
+
 // IPC API types
 export interface FluxoraAPI {
   projects: {
@@ -1566,6 +1768,36 @@ export interface FluxoraAPI {
   };
   models: {
     updateAgentModel(agentId: string, input: AgentModelSettingInput): Promise<Agent>;
+  };
+  // ============================================================================
+  // PR 007 — Provider Engine próprio
+  // ============================================================================
+  //
+  // Esta superfície coexiste com `opencode.getCatalog` etc. (legado do
+  // Electron). Em runtime Tauri, o `desktopBridge` roteia `opencode.getCatalog`
+  // para o Provider Engine quando há providers cadastrados. A superfície
+  // `providers.*` é a forma canônica nova.
+  providers: {
+    /** Lista todos os providers configurados. */
+    list(): Promise<AiProviderConfig[]>;
+    /** Retorna um provider pelo `id`. */
+    get(id: string): Promise<AiProviderConfig | null>;
+    /** Cria um novo provider. */
+    create(input: Omit<AiProviderConfig, "id" | "createdAt" | "updatedAt">): Promise<AiProviderConfig>;
+    /** Atualiza um provider existente. */
+    update(id: string, input: Partial<Omit<AiProviderConfig, "id" | "createdAt" | "updatedAt">>): Promise<AiProviderConfig>;
+    /** Remove um provider. */
+    remove(id: string): Promise<void>;
+    /** Testa a conexão com o provider (health-check). */
+    test(id: string): Promise<ProviderTestResult>;
+    /** Lista modelos do provider (via `/models` quando suportado). */
+    listModels(id: string): Promise<AiModelInfo[]>;
+    /**
+     * Fundação técnica: faz uma chamada simples de chat.
+     * Apenas para validação do adapter. O chat real fica para
+     * o Mission Engine em PR futura.
+     */
+    chatOnce(input: ChatOnceRequest): Promise<ChatOnceResult>;
   };
   voice: {
     createFromTranscript(input: string | { transcript: string; activeProject?: { id: string; name: string } | null; availableProjects?: Array<{ id: string; name: string }> }): Promise<VoiceContextResult>;

@@ -12,6 +12,8 @@ import type {
   BackgroundWorkflowJob, OpenCodeDiagnosticResult, AudioRetentionSettings, AudioStorageStats,
   WhisperDownloadProgress, WhisperModelInfo,
   FluxoraEvent, FluxoraEventLevel, FluxoraEventSource,
+  AiProviderConfig, AiModelInfo, ChatOnceRequest, ChatOnceResult,
+  ProviderTestResult,
 } from "@fluxora/shared";
 import { buildVoiceContext } from "@fluxora/voice-context";
 
@@ -880,6 +882,60 @@ export function createMockAPI(): FluxoraAPI {
         if (a) Object.assign(a, { modelProviderId: input.modelProviderId, modelName: input.modelName, updatedAt: new Date().toISOString() });
         return a!;
       },
+    },
+    // PR 007 — Provider Engine próprio (fallback mock).
+    // Quando rodando fora do runtime Tauri, devolve listas vazias
+    // e respostas simples. O `desktopBridge` é quem decide se a
+    // chamada cai aqui ou vai para o backend Rust.
+    providers: {
+      list: async () => {
+        // Em browser, o mock é vazio. O `opencode.getCatalog`
+        // continua sendo a fonte de verdade no navegador.
+        return [] as AiProviderConfig[];
+      },
+      get: async (id: string) => null,
+      create: async (input): Promise<AiProviderConfig> => ({
+        id: `mock-provider-${Date.now()}`,
+        name: input.name,
+        kind: input.kind,
+        baseUrl: input.baseUrl,
+        apiKeyEnv: input.apiKeyEnv,
+        defaultModel: input.defaultModel,
+        enabled: input.enabled,
+        capabilities: input.capabilities,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      update: async (id, input) => ({
+        id,
+        name: input.name ?? "Mock Provider",
+        kind: input.kind ?? "openai-compatible",
+        baseUrl: input.baseUrl,
+        apiKeyEnv: input.apiKeyEnv,
+        defaultModel: input.defaultModel,
+        enabled: input.enabled ?? true,
+        capabilities: input.capabilities,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      remove: async () => {
+        // noop
+      },
+      test: async (id: string): Promise<ProviderTestResult> => ({
+        ok: false,
+        providerId: id,
+        status: "unreachable",
+        message: "Provider Engine só funciona em runtime Tauri.",
+        durationMs: 0,
+      }),
+      listModels: async () => [] as AiModelInfo[],
+      chatOnce: async (input: ChatOnceRequest): Promise<ChatOnceResult> => ({
+        text: "",
+        providerId: input.providerId,
+        model: input.model,
+        durationMs: 0,
+        usage: { mock: true },
+      }),
     },
     voice: {
       createFromTranscript: async (input: any) => buildVoiceContext(typeof input === "string" ? { transcript: input } : input),

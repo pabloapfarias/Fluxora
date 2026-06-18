@@ -1,17 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AiModelInfo,
+  AiProviderConfig,
   AudioProviderSettings,
   AudioRetentionSettings,
   AudioTranscriptionInput,
   AudioTranscriptionResult,
+  ChatOnceRequest,
+  ChatOnceResult,
   CreateProjectInput,
   FluxoraAPI,
   FluxoraEvent,
   FluxoraEventLevel,
   FluxoraEventSource,
   GitInspectionResult,
+  OpenCodeCatalogResult,
+  OpenCodeModel,
+  OpenCodeProvider,
   Project,
+  ProviderTestResult,
   SelectDirectoryResult,
   UpdateProjectInput,
   ValidatePathResult,
@@ -644,6 +652,276 @@ const DEFAULT_AUDIO_RETENTION: AudioRetentionSettings = {
 };
 
 // ---------------------------------------------------------------------------
+// Providers (PR 007)
+// ---------------------------------------------------------------------------
+//
+// Esta seção implementa o Provider Engine próprio do FluxoraV1.
+// Em runtime Tauri, delega para o backend Rust real. Fora do
+// runtime Tauri (modo navegador/Vite dev), cai no fallback do
+// `mock-api.ts` (que devolve lista vazia + respostas simples).
+//
+// O `desktopBridge` também sobrescreve `opencode.getCatalog` /
+// `getModelsForProvider` / `refreshCatalog` em runtime Tauri
+// para que, quando houver providers cadastrados no Provider
+// Engine, a UI passe a refletir a fonte de verdade nova
+// (Provider Engine) em vez do catálogo hardcoded do Electron
+// legado. A UI continua consumindo `window.fluxora.opencode.*`
+// exatamente como antes — não há quebra de contrato.
+
+type BackendProviderTestPayload = {
+  ok: boolean;
+  providerId: string;
+  status: string;
+  message?: string | null;
+  durationMs: number;
+  models: AiModelInfo[];
+};
+
+/**
+ * Lista os providers configurados no Provider Engine.
+ * Em runtime Tauri, chama `providers_list`. Fora, devolve `[]`
+ * (o `desktopBridge` é quem decide; o mock também devolve `[]`).
+ */
+export async function listProviders(): Promise<AiProviderConfig[]> {
+  if (isTauriRuntime()) {
+    try {
+      return await invoke<AiProviderConfig[]>("providers_list", {});
+    } catch (error) {
+      console.warn(
+        "[desktopBridge] providers_list falhou, usando mock",
+        error
+      );
+    }
+  }
+  return [];
+}
+
+export async function getProvider(id: string): Promise<AiProviderConfig | null> {
+  if (isTauriRuntime()) {
+    try {
+      return await invoke<AiProviderConfig | null>("providers_get", { id });
+    } catch (error) {
+      console.warn("[desktopBridge] providers_get falhou, usando mock", error);
+    }
+  }
+  return null;
+}
+
+export async function createProvider(
+  input: Omit<AiProviderConfig, "id" | "createdAt" | "updatedAt">
+): Promise<AiProviderConfig> {
+  return invokeOrFallback<AiProviderConfig>(
+    "providers_create",
+    { payload: input },
+    async () => {
+      // Sem Tauri, devolvemos um stub. O mock-api também tem
+      // uma versão, mas esta função é exposta diretamente.
+      return {
+        id: `mock-provider-${Date.now()}`,
+        ...input,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+  );
+}
+
+export async function updateProvider(
+  id: string,
+  input: Partial<Omit<AiProviderConfig, "id" | "createdAt" | "updatedAt">>
+): Promise<AiProviderConfig> {
+  return invokeOrFallback<AiProviderConfig>(
+    "providers_update",
+    { id, payload: input },
+    async () => {
+      return {
+        id,
+        name: input.name ?? "Mock Provider",
+        kind: input.kind ?? "openai-compatible",
+        baseUrl: input.baseUrl,
+        apiKeyEnv: input.apiKeyEnv,
+        defaultModel: input.defaultModel,
+        enabled: input.enabled ?? true,
+        capabilities: input.capabilities,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+  );
+}
+
+export async function removeProvider(id: string): Promise<void> {
+  return invokeOrFallback<void>(
+    "providers_remove",
+    { id },
+    async () => {
+      // noop no mock
+    }
+  );
+}
+
+/**
+ * Testa um provider configurado. Em runtime Tauri, chama
+ * `providers_test`. Fora, devolve `ok: false` com mensagem
+ * clara.
+ */
+export async function testProvider(
+  id: string
+): Promise<ProviderTestResult> {
+  if (isTauriRuntime()) {
+    try {
+      const result = await invoke<BackendProviderTestPayload>(
+        "providers_test",
+        { id }
+      );
+      return {
+        ok: result.ok,
+        providerId: result.providerId,
+        status: result.status as ProviderTestResult["status"],
+        message: result.message ?? undefined,
+        durationMs: result.durationMs,
+        models: result.models,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        providerId: id,
+        status: "unreachable",
+        message: error instanceof Error ? error.message : String(error),
+        durationMs: 0,
+      };
+    }
+  }
+  return {
+    ok: false,
+    providerId: id,
+    status: "unreachable",
+    message: "Provider Engine só funciona em runtime Tauri.",
+    durationMs: 0,
+  };
+}
+
+/**
+ * Lista modelos de um provider. Em runtime Tauri, chama
+ * `providers_list_models`. Fora, devolve `[]`.
+ */
+export async function listProviderModels(id: string): Promise<AiModelInfo[]> {
+  if (isTauriRuntime()) {
+    try {
+      const models = await invoke<AiModelInfo[]>("providers_list_models", {
+        id,
+      });
+      // Garante que `providerId` está preenchido (o backend já
+      // devolve, mas normalizamos para a UI).
+      return models.map((m) => ({ ...m, providerId: m.providerId || id }));
+    } catch (error) {
+      console.warn(
+        "[desktopBridge] providers_list_models falhou, usando mock",
+        error
+      );
+    }
+  }
+  return [];
+}
+
+/**
+ * Fundação técnica: faz uma chamada simples de chat. Apenas
+ * para validação do adapter. O chat real fica para o Mission
+ * Engine em PR futura.
+ */
+export async function chatOnce(
+  input: ChatOnceRequest
+): Promise<ChatOnceResult> {
+  if (isTauriRuntime()) {
+    try {
+      return await invoke<ChatOnceResult>("providers_chat_once", {
+        payload: input,
+      });
+    } catch (error) {
+      return {
+        text: "",
+        model: input.model,
+        providerId: input.providerId,
+        durationMs: 0,
+        usage: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+  return {
+    text: "",
+    model: input.model,
+    providerId: input.providerId,
+    durationMs: 0,
+    usage: { mock: true },
+  };
+}
+
+/**
+ * Constrói um `OpenCodeCatalogResult` a partir dos providers
+ * reais do Provider Engine. Usado pelo `desktopBridge` para
+ * sobrescrever `opencode.getCatalog` em runtime Tauri quando
+ * há providers cadastrados.
+ *
+ * Estratégia:
+ * - providers do `Provider Engine` viram entradas em
+ *   `OpenCodeProvider.providers` com `id` no formato
+ *   `provider/{id}` (mesmo padrão usado pelo OpenCode CLI).
+ * - Os modelos de cada provider viram entradas em
+ *   `OpenCodeModel` com `id` no formato
+ *   `provider/{providerId}/{modelId}`.
+ * - Se um provider não conseguir listar modelos, ele ainda
+ *   aparece em `providers`, apenas sem modelos em
+ *   `modelsByProvider`.
+ */
+async function buildCatalogFromProviders(): Promise<OpenCodeCatalogResult> {
+  const providers = await listProviders();
+  if (providers.length === 0) {
+    return {
+      providers: [],
+      models: [],
+      modelsByProvider: {},
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+  const opencodeProviders: OpenCodeProvider[] = providers
+    .filter((p) => p.enabled)
+    .map((p) => ({
+      id: p.id,
+      displayName: p.name,
+      authType: p.apiKeyEnv ? "api" : "none",
+    }));
+  const opencodeModels: OpenCodeModel[] = [];
+  const modelsByProvider: Record<string, OpenCodeModel[]> = {};
+  // Carrega modelos em paralelo.
+  const modelLists = await Promise.all(
+    providers
+      .filter((p) => p.enabled)
+      .map((p) => listProviderModels(p.id).catch(() => [] as AiModelInfo[]))
+  );
+  providers
+    .filter((p) => p.enabled)
+    .forEach((p, idx) => {
+      const list = modelLists[idx] || [];
+      const mapped: OpenCodeModel[] = list.map((m) => ({
+        id: m.id,
+        providerId: p.id,
+        modelName: m.name,
+        displayName: m.displayName,
+      }));
+      opencodeModels.push(...mapped);
+      modelsByProvider[p.id] = mapped;
+    });
+  return {
+    providers: opencodeProviders,
+    models: opencodeModels,
+    modelsByProvider,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // desktopBridge factory
 // ---------------------------------------------------------------------------
 
@@ -652,6 +930,36 @@ export function createDesktopBridge(): FluxoraAPI {
 
   return {
     ...mock,
+    providers: {
+      // PR 007 — Provider Engine próprio. Em runtime Tauri,
+      // delega para o backend Rust. Fora, cai no mock
+      // (que devolve lista vazia — o `opencode.getCatalog`
+      // legado continua sendo a fonte no navegador).
+      list() {
+        return listProviders();
+      },
+      get(id: string) {
+        return getProvider(id);
+      },
+      create(input) {
+        return createProvider(input);
+      },
+      update(id, input) {
+        return updateProvider(id, input);
+      },
+      remove(id: string) {
+        return removeProvider(id);
+      },
+      test(id: string) {
+        return testProvider(id);
+      },
+      listModels(id: string) {
+        return listProviderModels(id);
+      },
+      chatOnce(input: ChatOnceRequest) {
+        return chatOnce(input);
+      },
+    },
     projects: {
       ...mock.projects,
       async list() {
@@ -742,6 +1050,58 @@ export function createDesktopBridge(): FluxoraAPI {
       },
       async clearRecent() {
         return clearRecentFluxoraEvents(mock);
+      },
+    },
+    opencode: {
+      // PR 007 — Provider Engine próprio. Em runtime Tauri,
+      // quando há providers cadastrados no Provider Engine,
+      // o catálogo passa a ser derivado de lá. A UI continua
+      // consumindo `window.fluxora.opencode.getCatalog` etc.
+      // exatamente como antes. Fora do runtime Tauri, o mock
+      // legado (OpenCode CLI simulado) é preservado.
+      detect: mock.opencode.detect.bind(mock.opencode),
+      getSettings: mock.opencode.getSettings.bind(mock.opencode),
+      updateSettings: mock.opencode.updateSettings.bind(mock.opencode),
+      getStatus: mock.opencode.getStatus.bind(mock.opencode),
+      diagnostics: mock.opencode.diagnostics,
+      controlledExecution: mock.opencode.controlledExecution,
+      async getCatalog(): Promise<OpenCodeCatalogResult> {
+        if (isTauriRuntime()) {
+          try {
+            const catalog = await buildCatalogFromProviders();
+            if (catalog.providers.length > 0) {
+              return catalog;
+            }
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] buildCatalogFromProviders falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.opencode.getCatalog();
+      },
+      async getModelsForProvider(providerId: string): Promise<OpenCodeModel[]> {
+        if (isTauriRuntime()) {
+          try {
+            const catalog = await buildCatalogFromProviders();
+            if (catalog.providers.length > 0) {
+              return catalog.modelsByProvider[providerId] || [];
+            }
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] getModelsForProvider falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.opencode.getModelsForProvider(providerId);
+      },
+      async refreshCatalog(): Promise<OpenCodeCatalogResult> {
+        // Reaproveita o pipeline de `getCatalog`. Não há cache
+        // persistente no Provider Engine — cada chamada faz
+        // `GET /models` no adapter.
+        return this.getCatalog();
       },
     },
     voice: {

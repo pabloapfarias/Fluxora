@@ -2,6 +2,7 @@ mod events;
 mod filesystem;
 mod git;
 mod projects;
+mod providers;
 mod voice;
 
 use events::{
@@ -14,6 +15,10 @@ use git::{
     GitAppInfo, GitChangedFile, GitCommitInfo, GitCommitsOptions, GitSummary,
 };
 use projects::{CreateProjectPayload, SelectDirectoryResult, UpdateProjectPayload};
+use providers::{
+    ChatOncePayload, ChatOnceResultPayload, CreateProviderPayload, ProviderTestResultPayload,
+    StoredProvider, UpdateProviderPayload,
+};
 use voice::{
     TranscribePayload, UpdateSettingsPayload, VoiceProviderTestResult, VoiceState,
     VoiceTranscriptionResult,
@@ -291,18 +296,88 @@ fn events_clear_recent(app: AppHandle) -> Result<(), String> {
     events::events_clear_recent(app)
 }
 
+// ---------------------------------------------------------------------------
+// Providers (PR 007)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn providers_ping() -> String {
+    providers::providers_ping()
+}
+
+#[tauri::command]
+fn providers_list(app: AppHandle) -> Result<Vec<StoredProvider>, String> {
+    providers::providers_list(app)
+}
+
+#[tauri::command]
+fn providers_get(app: AppHandle, id: String) -> Result<Option<StoredProvider>, String> {
+    providers::providers_get(app, id)
+}
+
+#[tauri::command]
+fn providers_create(
+    app: AppHandle,
+    payload: CreateProviderPayload,
+) -> Result<StoredProvider, String> {
+    providers::providers_create(app, payload)
+}
+
+#[tauri::command]
+fn providers_update(
+    app: AppHandle,
+    id: String,
+    payload: UpdateProviderPayload,
+) -> Result<StoredProvider, String> {
+    providers::providers_update(app, id, payload)
+}
+
+#[tauri::command]
+fn providers_remove(app: AppHandle, id: String) -> Result<(), String> {
+    providers::providers_remove(app, id)
+}
+
+#[tauri::command]
+fn providers_test(
+    app: AppHandle,
+    id: String,
+) -> Result<ProviderTestResultPayload, String> {
+    providers::providers_test(app, id)
+}
+
+#[tauri::command]
+fn providers_list_models(
+    app: AppHandle,
+    id: String,
+) -> Result<Vec<providers::ModelInfo>, String> {
+    providers::providers_list_models(app, id)
+}
+
+#[tauri::command]
+fn providers_chat_once(
+    app: AppHandle,
+    payload: ChatOncePayload,
+) -> Result<ChatOnceResultPayload, String> {
+    providers::providers_chat_once(app, payload)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppEventsState::new())
         .manage(VoiceState::new())
+        .manage(providers::ProvidersState::new())
         .setup(|app| {
             // PR 006 — Carrega `voice.json` salvo no app data dir.
             // Falhas de I/O são logadas e descartadas; o app
             // continua com defaults até o usuário salvar pela UI.
             let handle = app.handle().clone();
             voice::load_settings_on_startup(&handle);
+
+            // PR 007 — Carrega `providers.json` salvo no app data
+            // dir. Mesma estratégia de tolerância a falhas.
+            providers::load_providers_on_startup(&handle);
 
             // Emite o evento `app/ready` no barramento assim que o
             // shell Tauri está pronto. Este é o primeiro evento real
@@ -353,7 +428,16 @@ pub fn run() {
             events_ping,
             events_emit_diagnostic,
             events_list_recent,
-            events_clear_recent
+            events_clear_recent,
+            providers_ping,
+            providers_list,
+            providers_get,
+            providers_create,
+            providers_update,
+            providers_remove,
+            providers_test,
+            providers_list_models,
+            providers_chat_once
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
