@@ -38,6 +38,24 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   até o Mission Engine) e adiciona `subscribe` / `on` / `listRecent`
   / `emitDiagnostic` / `clearRecent` / `unsubscribe` / `off`
   roteados pelo Tauri com fallback mock fora do runtime Tauri.
+- [PR 006 — Voice/Whisper no Tauri](./STATUS_MIGRATION_TAURI_PR_006_VOICE_WHISPER.md)
+  Migra o domínio `voice.*` para transcrição real em Rust/Tauri:
+  módulo `voice.rs` com `VoiceState` persistido em
+  `<app_data_dir>/fluxora/voice.json`, adapter Whisper HTTP
+  (OpenAI-compat) via `ureq` com multipart manual, suporte a
+  `whisper_http` / `openai_whisper` / `whisper_local` /
+  `whisper_local_managed`, comandos `voice_ping` /
+  `voice_get_settings` / `voice_update_settings` /
+  `voice_transcribe` / `voice_test_provider`, e eventos
+  `voice/transcription-started` / `voice/transcription-completed` /
+  `voice/transcription-failed` / `voice/provider-tested` /
+  `voice/settings-updated` emitidos no barramento `fluxora-event`
+  da PR 005. `desktopBridge` codifica áudio em base64 e
+  preserva `window.fluxora.voice.*` / `window.fluxora.settings.getAudioProvider*`
+  com fallback mock fora do runtime Tauri. Captura de áudio
+  continua no renderer (`useMicCapture`); `whisper.*` (bundle),
+  `whisperLocal.*` (download) e persistência de áudio em disco
+  permanecem mock — PR estritamente incremental.
 
 ## Convenções aplicadas em todas as PRs
 
