@@ -1326,6 +1326,77 @@ export interface VoiceRequestRecord {
   createdAt: string;
 }
 
+// ============================================================================
+// PR 006 — Contrato do barramento de voz
+// ============================================================================
+//
+// Tipos auxiliares para o payload dos eventos `voice/*` no
+// barramento `fluxora-event`. Backend emite, frontend
+// consome via `events.subscribe` ou `events.on("voice/...")`.
+
+/** Tipos canônicos de provider reconhecidos pelo backend. */
+export type VoiceProviderKind =
+  | "whisper-http"
+  | "whisper-local"
+  | "whisper-local-managed"
+  | "openai-whisper"
+  | "manual";
+
+/** Payload base comum a todos os eventos `voice/*`. */
+export interface VoiceEventBase {
+  kind: VoiceEventType;
+  provider: VoiceProviderKind;
+  model?: string;
+  language?: string;
+}
+
+/** Payload emitido no início da transcrição. */
+export interface VoiceTranscriptionStartedPayload extends VoiceEventBase {
+  kind: "voice/transcription-started";
+  bytes: number;
+  mimeType?: string;
+}
+
+/** Payload emitido no fim bem-sucedido da transcrição. */
+export interface VoiceTranscriptionCompletedPayload extends VoiceEventBase {
+  kind: "voice/transcription-completed";
+  durationMs: number;
+  textLength: number;
+  language?: string;
+}
+
+/** Payload emitido quando a transcrição falha. */
+export interface VoiceTranscriptionFailedPayload extends VoiceEventBase {
+  kind: "voice/transcription-failed";
+  durationMs: number;
+  errorCode: string;
+  /** Mensagem de erro já com secrets removidos. */
+  errorMessage: string;
+}
+
+/** Payload emitido pelo `voice_test_provider` ou auto-teste. */
+export interface VoiceProviderTestedPayload extends VoiceEventBase {
+  kind: "voice/provider-tested";
+  ok: boolean;
+  durationMs: number;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+/** Payload emitido quando `AudioProviderSettings` é atualizado. */
+export interface VoiceSettingsUpdatedPayload {
+  kind: "voice/settings-updated";
+  provider: VoiceProviderKind;
+}
+
+/** União discriminada de todos os payloads `voice/*`. */
+export type VoiceEventPayload =
+  | VoiceTranscriptionStartedPayload
+  | VoiceTranscriptionCompletedPayload
+  | VoiceTranscriptionFailedPayload
+  | VoiceProviderTestedPayload
+  | VoiceSettingsUpdatedPayload;
+
 export interface ChangedFileSummary {
   path: string;
   status: ChangedFile["status"];
@@ -1404,6 +1475,25 @@ export type FluxoraEventType =
   | "agent/event"
   | "voice/event"
   | "system/error";
+
+/**
+ * Sub-tipos do `FluxoraEvent` quando `source === "voice"`.
+ *
+ * O barramento do FluxoraV1 trafega por um único canal do Tauri
+ * (`fluxora-event`). Para eventos de voz, o `type` segue o padrão
+ * `voice/<kind>` e o `payload` traz metadados específicos do
+ * provedor (provider, model, durationMs etc.).
+ *
+ * Esses tipos são introduzidos na PR 006 (Voice/Whisper) mas
+ * definidos no contrato compartilhado para que o Mission Engine
+ * (PR 008) e o piloto automático (PR 009) possam reagir a eles.
+ */
+export type VoiceEventType =
+  | "voice/transcription-started"
+  | "voice/transcription-completed"
+  | "voice/transcription-failed"
+  | "voice/provider-tested"
+  | "voice/settings-updated";
 
 /** Evento genérico do barramento do FluxoraV1. */
 export interface FluxoraEvent {

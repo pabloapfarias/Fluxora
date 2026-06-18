@@ -127,7 +127,7 @@ fn generate_event_id() -> String {
 }
 
 /// Timestamp ISO 8601 (UTC) do momento de emissão.
-fn iso_now() -> String {
+pub fn iso_now() -> String {
     use time::format_description::well_known::Rfc3339;
     use time::OffsetDateTime;
     OffsetDateTime::now_utc()

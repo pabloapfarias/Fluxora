@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AudioProviderSettings,
+  AudioRetentionSettings,
+  AudioTranscriptionInput,
+  AudioTranscriptionResult,
   CreateProjectInput,
   FluxoraAPI,
   FluxoraEvent,
@@ -47,6 +51,45 @@ const FLUXORA_EVENT_CHANNEL = "fluxora-event";
 
 function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/**
+ * Codifica bytes em base64. O Tauri 2 serializa argumentos
+ * via JSON, então `Uint8Array` viraria `number[]` (gigante
+ * para áudios típicos). Enviamos base64 em vez disso.
+ *
+ * Implementação streaming para não estourar a stack em
+ * áudios longos.
+ */
+function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof btoa === "function" && bytes.length < 0xffff) {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+  // Fallback: chunked encoding sem btoa.
+  // Não é usado no Vite (btoa sempre existe), mas mantém
+  // compatibilidade caso rode em ambiente sem `btoa`.
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const chunk = bytes.subarray(i, i + CHUNK);
+    for (let j = 0; j < chunk.length; j += 1) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+  }
+  if (typeof btoa === "function") {
+    return btoa(binary);
+  }
+  // Node fallback (vite dev server, vitest)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const BufferCtor: any = (globalThis as any).Buffer;
+  if (BufferCtor) {
+    return BufferCtor.from(bytes).toString("base64");
+  }
+  throw new Error("Nenhum encoder base64 disponível no ambiente.");
 }
 
 async function invokeOrFallback<T>(
@@ -384,6 +427,223 @@ export async function clearRecentFluxoraEvents(api: FluxoraAPI): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Voice / Whisper (PR 006)
+// ---------------------------------------------------------------------------
+//
+// Esta seção conecta o frontend ao backend Tauri real para
+// transcrição de voz. A captura de áudio continua no renderer
+// (`useMicCapture` → MediaRecorder). O frontend codifica os
+// bytes em base64 e envia para o backend via `voice_transcribe`,
+// que delega para o adapter HTTP do Whisper.
+//
+// Os métodos legados do mock (`saveAudio`, `getAudioPath`,
+// `listRequests`, `cleanupOldAudio`, `getAudioStorageStats`,
+// `openAudioFolder`, `getAudioRetentionSettings`,
+// `updateAudioRetentionSettings`, `whisper.*`, `whisperLocal.*`)
+// permanecem via mock nesta PR — persistência de áudio e
+// download/gerência de modelos ficam para PRs futuras. O
+// importante é o caminho "fala → transcrição real → texto
+// para revisão" funcionar.
+
+type BackendAudioSettings = {
+  type: string;
+  apiKeyEnv?: string | null;
+  language?: string | null;
+  baseUrl?: string | null;
+  model?: string | null;
+  binaryPath?: string | null;
+  modelPath?: string | null;
+  threads?: number | null;
+};
+
+type BackendVoiceTranscriptionResult = {
+  text: string;
+  language?: string | null;
+  durationMs?: number | null;
+  provider: string;
+  model?: string | null;
+};
+
+type BackendProviderTestResult = {
+  ok: boolean;
+  provider: string;
+  baseUrl: string;
+  model?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  durationMs: number;
+};
+
+function toFrontendAudioSettings(input: BackendAudioSettings): AudioProviderSettings {
+  return {
+    type: (input.type as AudioProviderSettings["type"]) || "manual",
+    apiKeyEnv: input.apiKeyEnv ?? undefined,
+    language: input.language ?? undefined,
+    baseUrl: input.baseUrl ?? undefined,
+    model: input.model ?? undefined,
+    binaryPath: input.binaryPath ?? undefined,
+    modelPath: input.modelPath ?? undefined,
+    threads: input.threads ?? undefined,
+  };
+}
+
+/**
+ * Lê as configurações de áudio persistidas no backend.
+ * Equivalente a `settings.getAudioProvider()`, mas a fonte
+ * da verdade no runtime Tauri é o `voice.json`.
+ */
+export async function getAudioProviderSettings(
+  api: FluxoraAPI
+): Promise<AudioProviderSettings> {
+  if (isTauriRuntime()) {
+    try {
+      const raw = await invoke<BackendAudioSettings>("voice_get_settings", {});
+      return toFrontendAudioSettings(raw);
+    } catch (error) {
+      console.warn(
+        "[desktopBridge] voice_get_settings falhou, usando mock",
+        error
+      );
+    }
+  }
+  return api.settings.getAudioProvider();
+}
+
+/**
+ * Persiste as configurações de áudio. Em runtime Tauri,
+ * delega ao `voice_update_settings`. Fora, atualiza o mock.
+ */
+export async function setAudioProviderSettings(
+  api: FluxoraAPI,
+  patch: Partial<AudioProviderSettings>
+): Promise<AudioProviderSettings> {
+  if (isTauriRuntime()) {
+    try {
+      const payload: Record<string, unknown> = {};
+      if (patch.type !== undefined) payload.providerType = patch.type;
+      if (patch.apiKeyEnv !== undefined) payload.apiKeyEnv = patch.apiKeyEnv;
+      if (patch.language !== undefined) payload.language = patch.language;
+      if (patch.baseUrl !== undefined) payload.baseUrl = patch.baseUrl;
+      if (patch.model !== undefined) payload.model = patch.model;
+      if (patch.binaryPath !== undefined) payload.binaryPath = patch.binaryPath;
+      if (patch.modelPath !== undefined) payload.modelPath = patch.modelPath;
+      if (patch.threads !== undefined) payload.threads = patch.threads;
+      const raw = await invoke<BackendAudioSettings>("voice_update_settings", {
+        payload,
+      });
+      return toFrontendAudioSettings(raw);
+    } catch (error) {
+      console.warn(
+        "[desktopBridge] voice_update_settings falhou, usando mock",
+        error
+      );
+    }
+  }
+  return api.settings.setAudioProvider(patch);
+}
+
+/**
+ * Faz a transcrição real. Em runtime Tauri, codifica os
+ * bytes em base64 e chama `voice_transcribe`. Fora do Tauri,
+ * cai no mock (que devolve texto vazio).
+ */
+export async function transcribeAudio(
+  api: FluxoraAPI,
+  input: AudioTranscriptionInput
+): Promise<AudioTranscriptionResult> {
+  if (isTauriRuntime()) {
+    try {
+      // Normaliza audio para Uint8Array
+      let bytes: Uint8Array;
+      if (input.audio instanceof Uint8Array) {
+        bytes = input.audio;
+      } else if (input.audio instanceof ArrayBuffer) {
+        bytes = new Uint8Array(input.audio);
+      } else if (typeof input.audio === "string") {
+        // Pode ser base64 já codificado (fluxo incomum)
+        // Encoda como bytes utf-8 para manter compatibilidade.
+        bytes = new TextEncoder().encode(input.audio);
+      } else {
+        // Fallback: tenta converter via constructor
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bytes = new Uint8Array((input.audio as any).buffer || input.audio);
+      }
+      const audioBase64 = bytesToBase64(bytes);
+      const result = await invoke<BackendVoiceTranscriptionResult>(
+        "voice_transcribe",
+        {
+          payload: {
+            audioBase64,
+            mimeType: input.mimeType,
+            language: input.language,
+            timeoutMs: 60_000,
+          },
+        }
+      );
+      return {
+        text: result.text,
+        language: result.language ?? input.language,
+        durationMs: result.durationMs ?? undefined,
+        provider: result.provider,
+      };
+    } catch (error) {
+      console.warn(
+        "[desktopBridge] voice_transcribe falhou, usando mock",
+        error
+      );
+    }
+  }
+  return api.voice.transcribe(input);
+}
+
+/**
+ * Health-check de provider (sem enviar áudio). Em runtime
+ * Tauri, chama `voice_test_provider`. Fora, devolve `false`
+ * (mock não testa).
+ */
+export async function testVoiceProvider(
+  api: FluxoraAPI
+): Promise<{ ok: boolean; message: string; details?: string }> {
+  if (isTauriRuntime()) {
+    try {
+      const result = await invoke<BackendProviderTestResult>(
+        "voice_test_provider",
+        {}
+      );
+      return {
+        ok: result.ok,
+        message: result.ok
+          ? `Provider ${result.provider} respondeu em ${result.baseUrl}.`
+          : `Provider ${result.provider} não respondeu corretamente.`,
+        details: result.errorMessage ?? undefined,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        message: "Erro ao testar provider",
+        details: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  // Mock fallback: chama `voice.probeServer()` que devolve boolean
+  const probe = await api.voice.probeServer();
+  return {
+    ok: probe,
+    message: probe ? "Provider (mock) disponível." : "Provider (mock) indisponível.",
+  };
+}
+
+/**
+ * Defaults de retenção de áudio. Mantidos no mock porque a
+ * persistência de áudio em disco não é implementada nesta PR
+ * (o áudio é descartado após a transcrição).
+ */
+const DEFAULT_AUDIO_RETENTION: AudioRetentionSettings = {
+  saveAudio: false,
+  retentionDays: 30,
+};
+
+// ---------------------------------------------------------------------------
 // desktopBridge factory
 // ---------------------------------------------------------------------------
 
@@ -482,6 +742,48 @@ export function createDesktopBridge(): FluxoraAPI {
       },
       async clearRecent() {
         return clearRecentFluxoraEvents(mock);
+      },
+    },
+    voice: {
+      // PR 006 — `transcribe` agora é real em runtime Tauri
+      // (delega ao backend Rust que faz HTTP para Whisper).
+      // Os outros métodos (saveAudio, listRequests, retention,
+      // cleanupOldAudio, etc.) permanecem mockados porque
+      // persistência de áudio em disco não é implementada
+      // nesta PR.
+      createFromTranscript: mock.voice.createFromTranscript.bind(mock.voice),
+      transcribe(input: AudioTranscriptionInput) {
+        return transcribeAudio(mock, input);
+      },
+      listRequests: mock.voice.listRequests.bind(mock.voice),
+      saveAudio: mock.voice.saveAudio.bind(mock.voice),
+      saveAudioBytes: mock.voice.saveAudioBytes.bind(mock.voice),
+      getAudioPath: mock.voice.getAudioPath.bind(mock.voice),
+      getAudioRetentionSettings: async () => ({ ...DEFAULT_AUDIO_RETENTION }),
+      updateAudioRetentionSettings: async (
+        input: Partial<AudioRetentionSettings>
+      ) => ({ ...DEFAULT_AUDIO_RETENTION, ...input }),
+      cleanupOldAudio: async () => ({ deleted: 0, freedBytes: 0 }),
+      getAudioStorageStats: async () => ({ count: 0, bytes: 0 }),
+      openAudioFolder: async () => {
+        // Stub — abre pasta é responsabilidade do shell Tauri
+        // (PR futura: tauri-plugin-shell ou tauri-plugin-dialog).
+      },
+      probeServer: async () => {
+        // Em runtime Tauri, faz health-check real via backend.
+        const result = await testVoiceProvider(mock);
+        return result.ok;
+      },
+    },
+    settings: {
+      ...mock.settings,
+      // PR 006 — `getAudioProvider`/`setAudioProvider` agora
+      // persistem no `voice.json` via backend Rust.
+      getAudioProvider() {
+        return getAudioProviderSettings(mock);
+      },
+      setAudioProvider(patch: Partial<AudioProviderSettings>) {
+        return setAudioProviderSettings(mock, patch);
       },
     },
   };

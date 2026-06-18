@@ -2,6 +2,7 @@ mod events;
 mod filesystem;
 mod git;
 mod projects;
+mod voice;
 
 use events::{
     AppEventsState, EmitDiagnosticInput, FluxoraEvent, ListRecentInput,
@@ -13,6 +14,10 @@ use git::{
     GitAppInfo, GitChangedFile, GitCommitInfo, GitCommitsOptions, GitSummary,
 };
 use projects::{CreateProjectPayload, SelectDirectoryResult, UpdateProjectPayload};
+use voice::{
+    TranscribePayload, UpdateSettingsPayload, VoiceProviderTestResult, VoiceState,
+    VoiceTranscriptionResult,
+};
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
@@ -222,6 +227,41 @@ fn app_get_git_info() -> GitAppInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Voice / Whisper (PR 006)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn voice_ping() -> String {
+    voice::voice_ping()
+}
+
+#[tauri::command]
+fn voice_get_settings(app: AppHandle) -> Result<voice::StoredAudioSettings, String> {
+    voice::voice_get_settings(app)
+}
+
+#[tauri::command]
+fn voice_update_settings(
+    app: AppHandle,
+    payload: UpdateSettingsPayload,
+) -> Result<voice::StoredAudioSettings, String> {
+    voice::voice_update_settings(app, payload)
+}
+
+#[tauri::command]
+fn voice_transcribe(
+    app: AppHandle,
+    payload: TranscribePayload,
+) -> Result<VoiceTranscriptionResult, String> {
+    voice::voice_transcribe(app, payload)
+}
+
+#[tauri::command]
+fn voice_test_provider(app: AppHandle) -> Result<VoiceProviderTestResult, String> {
+    voice::voice_test_provider(app)
+}
+
+// ---------------------------------------------------------------------------
 // Events (PR 005)
 // ---------------------------------------------------------------------------
 
@@ -256,11 +296,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppEventsState::new())
+        .manage(VoiceState::new())
         .setup(|app| {
+            // PR 006 — Carrega `voice.json` salvo no app data dir.
+            // Falhas de I/O são logadas e descartadas; o app
+            // continua com defaults até o usuário salvar pela UI.
+            let handle = app.handle().clone();
+            voice::load_settings_on_startup(&handle);
+
             // Emite o evento `app/ready` no barramento assim que o
             // shell Tauri está pronto. Este é o primeiro evento real
             // que a UI pode observar via `events.subscribe`.
-            let handle = app.handle().clone();
             let ready = events::build_event(
                 "app/ready",
                 "app",
@@ -299,6 +345,11 @@ pub fn run() {
             git_diff,
             git_summary,
             app_get_git_info,
+            voice_ping,
+            voice_get_settings,
+            voice_update_settings,
+            voice_transcribe,
+            voice_test_provider,
             events_ping,
             events_emit_diagnostic,
             events_list_recent,
