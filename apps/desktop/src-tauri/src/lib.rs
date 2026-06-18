@@ -2,6 +2,7 @@ mod events;
 mod filesystem;
 mod git;
 mod missions;
+mod patches;
 mod projects;
 mod providers;
 mod voice;
@@ -37,7 +38,8 @@ use permissions::{
 use approvals::{
     CreateApprovalPayload, ExecutionApprovalRecord, RejectApprovalPayload, CancelApprovalPayload,
 };
-use serde::Serialize;
+use patches::{PatchFileChangeRecord, PatchProposalRecord};
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 
@@ -571,6 +573,111 @@ fn scheduler_cancel_job(
     missions::scheduler_cancel_job(app, payload)
 }
 
+// ---------------------------------------------------------------------------
+// Patches (PR 010)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePatchProposalPayload {
+    pub title: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    pub mission_id: String,
+    pub project_id: String,
+    pub files: Vec<PatchFileChangeRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyPatchPayload {
+    pub proposal_id: String,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RejectPatchPayload {
+    pub id: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[tauri::command]
+fn patches_ping() -> String {
+    patches::patches_ping()
+}
+
+#[tauri::command]
+fn patches_list(app: AppHandle) -> Result<Vec<PatchProposalRecord>, String> {
+    patches::patches_list(app)
+}
+
+#[tauri::command]
+fn patches_get(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<PatchProposalRecord>, String> {
+    patches::patches_get(app, id)
+}
+
+#[tauri::command]
+fn patches_list_by_mission(
+    app: AppHandle,
+    mission_id: String,
+) -> Result<Vec<PatchProposalRecord>, String> {
+    patches::patches_list_by_mission(app, mission_id)
+}
+
+#[tauri::command]
+fn patches_create(
+    app: AppHandle,
+    payload: CreatePatchProposalPayload,
+) -> Result<PatchProposalRecord, String> {
+    patches::patches_create(
+        app,
+        payload.title,
+        payload.summary,
+        payload.mission_id,
+        payload.project_id,
+        payload.files,
+    )
+}
+
+#[tauri::command]
+fn patches_apply(
+    app: AppHandle,
+    payload: ApplyPatchPayload,
+) -> Result<PatchProposalRecord, String> {
+    patches::patches_apply(app, payload.proposal_id, payload.approval_id)
+}
+
+#[tauri::command]
+fn patches_reject(
+    app: AppHandle,
+    payload: RejectPatchPayload,
+) -> Result<PatchProposalRecord, String> {
+    patches::patches_reject(app, payload.id, payload.note)
+}
+
+#[tauri::command]
+fn patches_get_changed_files(
+    app: AppHandle,
+    workflow_run_id: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    patches::patches_get_changed_files(app, workflow_run_id)
+}
+
+#[tauri::command]
+fn patches_get_file_diff(
+    app: AppHandle,
+    workflow_run_id: String,
+    file_path: String,
+) -> Result<Option<serde_json::Value>, String> {
+    patches::patches_get_file_diff(app, workflow_run_id, file_path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -582,6 +689,7 @@ pub fn run() {
         .manage(missions::MissionJobsState::new())
         .manage(permissions::PermissionsState::new())
         .manage(approvals::ApprovalsState::new())
+        .manage(patches::PatchesState::new())
         .setup(|app| {
             // PR 006 — Carrega `voice.json` salvo no app data dir.
             // Falhas de I/O são logadas e descartadas; o app
@@ -605,6 +713,10 @@ pub fn run() {
             // PR 009 — Carrega `approvals.json` salvo no app data
             // dir (estado vazio até a primeira criação).
             approvals::load_approvals_on_startup(&handle);
+
+            // PR 010 — Carrega `patches.json` salvo no app data
+            // dir (estado vazio até a primeira proposta).
+            patches::load_patches_on_startup(&handle);
 
             // Emite o evento `app/ready` no barramento assim que o
             // shell Tauri está pronto. Este é o primeiro evento real
@@ -690,7 +802,16 @@ pub fn run() {
             scheduler_ping,
             scheduler_list_jobs,
             scheduler_get_job,
-            scheduler_cancel_job
+            scheduler_cancel_job,
+            patches_ping,
+            patches_list,
+            patches_get,
+            patches_list_by_mission,
+            patches_create,
+            patches_apply,
+            patches_reject,
+            patches_get_changed_files,
+            patches_get_file_diff
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

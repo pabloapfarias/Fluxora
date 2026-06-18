@@ -68,6 +68,7 @@ use std::time::SystemTime;
 use tauri::{AppHandle, Manager};
 
 use crate::events;
+use crate::patches;
 use crate::permissions;
 use crate::projects;
 use crate::providers;
@@ -699,7 +700,23 @@ Nessa execução você está em MODO PROPOSITIVO / READ-ONLY.\n\
 mas não aplique.\n\
 - Responda com:\n  1. Entendimento da missão\n  2. Plano de ação\n  \
 3. Arquivos provavelmente envolvidos\n  4. Resultado ou proposta final\n  \
-5. Próximos passos recomendados",
+5. Próximos passos recomendados\n\n\
+Se quiser propor alterações concretas, inclua ao final da resposta um \
+bloco EXATAMENTE assim:\n\n\
+```fluxora_patch\n\
+{{\n  \"title\": \"Resumo curto da alteração\",\n  \"summary\": \"Descrição do que será alterado\",\n  \"files\": [\n    {{\n      \"path\": \"caminho/relativo/arquivo.ts\",\n      \"operation\": \"modify\",\n      \"afterContent\": \"conteúdo completo final do arquivo\"\n    }}\n  ]\n}}\n\
+```\n\n\
+Regras do bloco `fluxora_patch`:\n\
+- Use apenas caminhos RELATIVOS ao projeto (sem `..`, sem absolutos).\n\
+- Não proponha alterações em `node_modules`, `.git`, `vendor`, `dist`, `build`, `target`, `.next`, `.cache`, `.turbo`, `out`.\n\
+- `operation` deve ser `create`, `modify` ou `delete`.\n\
+- Para `create` ou `modify`, envie o conteúdo final completo em `afterContent`.\n\
+- Para `delete`, use `operation: delete` sem `afterContent`.\n\
+- O bloco é OPCIONAL. Se você não quiser propor alterações concretas, \
+não inclua o bloco e responda apenas com a análise.\n\
+- O backend do Fluxora vai validar o bloco e aplicar SOMENTE se a \
+política do projeto permitir (ou se o usuário aprovar). Você nunca \
+aplica alterações diretamente — apenas propõe.",
         project_name = project_name,
         stack = if project_stack.is_empty() {
             "(não detectada)".to_string()
@@ -724,6 +741,160 @@ mas não aplique.\n\
             content: user_message,
         },
     ]
+}
+
+// ---------------------------------------------------------------------------
+// PR 010 — Parser do bloco `fluxora_patch`
+// ---------------------------------------------------------------------------
+//
+// O provider pode incluir, ao final da resposta, um bloco
+// markdown exatamente assim:
+//
+// ```fluxora_patch
+// { ...JSON... }
+// ```
+//
+// O backend do FluxoraV1 extrai esse bloco, valida o JSON,
+// valida os paths/limites, e cria uma `PatchProposal` (que
+// pode virar uma `ExecutionApproval` se a política exigir).
+// A resposta textual (sem o bloco) continua sendo salva em
+// `MissionRun.resultText` para o usuário ler.
+
+const FLUXORA_PATCH_MARKER: &str = "```fluxora_patch";
+const FLUXORA_PATCH_END: &str = "```";
+
+/// Resultado do parser do bloco `fluxora_patch`.
+#[derive(Debug, Clone)]
+pub(crate) struct FluxoraPatchExtract {
+    /// Texto original sem o bloco `fluxora_patch` (limpo).
+    pub cleaned_text: String,
+    /// Bloco extraído como JSON (sem o `\\`fluxora_patch`).
+    pub raw_json: Option<String>,
+    /// Arquivos parseados a partir do JSON (já validados pela
+    /// estrutura `PatchFileChangeRecord`). `None` quando o
+    /// bloco não foi encontrado.
+    pub files: Option<Vec<patches::PatchFileChangeRecord>>,
+    /// `title` extraído (já trim).
+    pub title: Option<String>,
+    /// `summary` extraído (já trim).
+    pub summary: Option<String>,
+}
+
+/// Extrai o bloco `fluxora_patch` da resposta do provider.
+/// Retorna o texto limpo (sem o bloco) e os metadados
+/// extraídos (se houver). Não falha se o bloco não estiver
+/// presente ou estiver malformado — apenas devolve
+/// `raw_json: None` ou `files: None` conforme o caso.
+pub(crate) fn extract_fluxora_patch_block(text: &str) -> FluxoraPatchExtract {
+    let marker_pos = match text.find(FLUXORA_PATCH_MARKER) {
+        Some(pos) => pos,
+        None => {
+            return FluxoraPatchExtract {
+                cleaned_text: text.to_string(),
+                raw_json: None,
+                files: None,
+                title: None,
+                summary: None,
+            };
+        }
+    };
+    // Encontra o início do JSON (após o marker)
+    let after_marker = marker_pos + FLUXORA_PATCH_MARKER.len();
+    let rest = &text[after_marker..];
+    // Pula \n ou \r\n após o marker
+    let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
+    // Encontra o fim do bloco (próximo ```)
+    let end_pos = match rest.find(FLUXORA_PATCH_END) {
+        Some(pos) => pos,
+        None => {
+            return FluxoraPatchExtract {
+                cleaned_text: text.to_string(),
+                raw_json: None,
+                files: None,
+                title: None,
+                summary: None,
+            };
+        }
+    };
+    let raw_json = rest[..end_pos].trim().to_string();
+    // Limpa o texto removendo o bloco inteiro (incluindo o
+    // ```fluxora_patch e o ``` final). A linha onde o bloco
+    // começa e o trailing newline são removidos.
+    let mut cleaned = String::with_capacity(text.len());
+    cleaned.push_str(&text[..marker_pos]);
+    let after_end = after_marker + (rest.len() - end_pos) + FLUXORA_PATCH_END.len();
+    cleaned.push_str(&text[after_end..]);
+    let cleaned = cleaned.trim_end_matches(|c: char| c == '\n' || c == ' ').to_string();
+    // Tenta parsear o JSON
+    let parsed: Option<serde_json::Value> = serde_json::from_str(&raw_json)
+        .map_err(|e| {
+            eprintln!("[fluxora missions] bloco fluxora_patch inválido (JSON): {e}");
+            e
+        })
+        .ok();
+    let (mut title, mut summary, mut files): (Option<String>, Option<String>, Option<Vec<patches::PatchFileChangeRecord>>) =
+        (None, None, None);
+    if let Some(value) = parsed {
+        if let Some(t) = value.get("title").and_then(|v| v.as_str()) {
+            title = Some(t.to_string());
+        }
+        if let Some(s) = value.get("summary").and_then(|v| v.as_str()) {
+            summary = Some(s.to_string());
+        }
+        if let Some(arr) = value.get("files").and_then(|v| v.as_array()) {
+            let mut out: Vec<patches::PatchFileChangeRecord> = Vec::new();
+            for (idx, item) in arr.iter().enumerate() {
+                let path = item
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let operation = item
+                    .get("operation")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let after_content = item
+                    .get("afterContent")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let before_content = item
+                    .get("beforeContent")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let unified_diff = item
+                    .get("unifiedDiff")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let additions = item.get("additions").and_then(|v| v.as_u64()).map(|n| n as u32);
+                let deletions = item.get("deletions").and_then(|v| v.as_u64()).map(|n| n as u32);
+                if path.is_none() || operation.is_none() {
+                    eprintln!(
+                        "[fluxora missions] bloco fluxora_patch: arquivo #{} sem path ou operation",
+                        idx + 1
+                    );
+                    continue;
+                }
+                out.push(patches::PatchFileChangeRecord {
+                    path: path.unwrap(),
+                    operation: operation.unwrap(),
+                    before_content,
+                    after_content,
+                    unified_diff,
+                    additions,
+                    deletions,
+                    is_new_file: None,
+                    is_deleted_file: None,
+                });
+            }
+            files = Some(out);
+        }
+    }
+    FluxoraPatchExtract {
+        cleaned_text: cleaned,
+        raw_json: Some(raw_json),
+        files,
+        title,
+        summary,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1163,10 +1334,109 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         }
     };
 
-    // 6. Final report
+    // 6. PR 010 — Extrair o bloco `fluxora_patch` da resposta
+    //    do provider. Se houver um bloco válido, criar uma
+    //    `PatchProposal` (que pode ficar em `pending_approval`
+    //    se a política do projeto exigir).
+    let patch_extract = extract_fluxora_patch_block(&result_text);
+    if let Some(raw_json) = &patch_extract.raw_json {
+        eprintln!(
+            "[fluxora missions] bloco fluxora_patch detectado ({} bytes de JSON)",
+            raw_json.len()
+        );
+    }
+    let cleaned_text = patch_extract.cleaned_text.clone();
+    if let (Some(files), Some(title)) = (&patch_extract.files, &patch_extract.title) {
+        if !files.is_empty() {
+            // Tenta criar a proposta a partir do bloco.
+            match patches::create_proposal_from_provider_text(
+                &app,
+                &running,
+                title.clone(),
+                patch_extract.summary.clone(),
+                files.clone(),
+            ) {
+                Ok((proposal, log)) => {
+                    // Log no MissionLog
+                    let _ = append_log(
+                        &state,
+                        &running.id,
+                        "info",
+                        &log,
+                        Some("patch-detected"),
+                        Some(serde_json::json!({
+                            "proposalId": &proposal.id,
+                            "status": &proposal.status,
+                            "filesCount": proposal.files.len(),
+                            "approvalId": &proposal.approval_id,
+                        })),
+                    );
+                    // Emite mission/phase indicando o estado
+                    let phase_label = match proposal.status.as_str() {
+                        "pending_approval" => "patch-pending-approval",
+                        "applied" => "patch-applied",
+                        "failed" => "patch-failed",
+                        _ => "patch-detected",
+                    };
+                    let _ = emit_mission_event(
+                        &app,
+                        "mission/phase",
+                        &running.id,
+                        Some(&running.project_id),
+                        if proposal.status == "pending_approval" { "warn" } else { "info" },
+                        &format!(
+                            "Proposta de patch detectada: {} (status: {})",
+                            proposal.title, proposal.status
+                        ),
+                        Some(phase_label),
+                        Some(serde_json::json!({
+                            "proposalId": &proposal.id,
+                            "status": &proposal.status,
+                            "filesCount": proposal.files.len(),
+                            "approvalId": &proposal.approval_id,
+                        })),
+                    );
+                }
+                Err(error) => {
+                    // Patch inválido (paths proibidos, decisão
+                    // `deny` na política, etc.). A missão
+                    // continua como read-only e o erro é
+                    // registrado como log + evento
+                    // `mission/phase` com `patch-skipped`.
+                    let _ = append_log(
+                        &state,
+                        &running.id,
+                        "warn",
+                        &format!("Proposta de patch ignorada: {error}"),
+                        Some("patch-skipped"),
+                        Some(serde_json::json!({
+                            "errorMessage": truncate_error(&error),
+                        })),
+                    );
+                    let _ = emit_mission_event(
+                        &app,
+                        "mission/phase",
+                        &running.id,
+                        Some(&running.project_id),
+                        "warn",
+                        "Proposta de patch ignorada por validação/política.",
+                        Some("patch-skipped"),
+                        Some(serde_json::json!({
+                            "errorMessage": truncate_error(&error),
+                        })),
+                    );
+                }
+            }
+        }
+    }
+
+    // 7. Final report — usa o `cleaned_text` (sem o bloco
+    //    `fluxora_patch`) para que o `resultText` da missão
+    //    seja o texto humano-legível.
+    let final_text = cleaned_text;
     let _ = update_mission(&state, &running.id, |m| {
         m.current_phase = Some("final-report".to_string());
-        m.result_text = Some(result_text.clone());
+        m.result_text = Some(final_text.clone());
     });
     let _ = persist(&app);
     record_phase(
@@ -1175,11 +1445,11 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         &running,
         "final-report",
         Some(serde_json::json!({
-            "resultLength": result_text.chars().count(),
+            "resultLength": final_text.chars().count(),
         })),
     );
 
-    // 7. Marcar como completed
+    // 8. Marcar como completed
     let completed = update_mission(&state, &running.id, |m| {
         m.status = "completed".to_string();
         m.completed_at = Some(now_iso());
@@ -1197,7 +1467,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         "Missão concluída.",
         Some("final-report"),
         Some(serde_json::json!({
-            "resultLength": result_text.chars().count(),
+            "resultLength": final_text.chars().count(),
             "jobId": &job_id,
         })),
     );

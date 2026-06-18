@@ -431,6 +431,13 @@ pub fn approvals_list_actionable(
 
 /// Aprova uma aprovação pendente. Não permite aprovar uma
 /// aprovação já resolvida (a não ser `pending`).
+///
+/// **PR 010 — Integração com Patch Engine:** se a aprovação
+/// for de `apply-patch` e existir uma `PatchProposal`
+/// vinculada em status `pending_approval`, chama
+/// `patches::patches_apply` automaticamente após marcar a
+/// aprovação como `approved`. O resultado da aplicação (sucesso
+/// ou falha) é comunicado via eventos `patch/*` no barramento.
 pub fn approvals_approve(
     app: AppHandle,
     id: String,
@@ -461,6 +468,39 @@ pub fn approvals_approve(
         &format!("Aprovação concedida: {}", updated.title),
         None,
     );
+    // PR 010 — Integração com Patch Engine. Aprovar uma
+    // aprovação de `apply-patch` dispara a aplicação da
+    // proposta vinculada (se houver e se a política permitir).
+    if updated.action == "apply-patch" {
+        // Tenta localizar a PatchProposal vinculada pelo
+        // `proposalId` salvo no payload da aprovação.
+        let linked_proposal_id: Option<String> = updated
+            .payload
+            .as_ref()
+            .and_then(|p| p.get("proposalId"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if let Some(proposal_id) = linked_proposal_id {
+            match crate::patches::patches_apply(
+                app.clone(),
+                proposal_id.clone(),
+                Some(updated.id.clone()),
+            ) {
+                Ok(_proposal) => {
+                    eprintln!(
+                        "[fluxora approvals] patches_apply disparado a partir de approval/approved (proposal={proposal_id}, approval={id})"
+                    );
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[fluxora approvals] patches_apply falhou após approval/approved (proposal={proposal_id}): {error}"
+                    );
+                    // A aprovação continua como `approved`; o
+                    // erro é registrado nos eventos `patch/*`.
+                }
+            }
+        }
+    }
     Ok(updated)
 }
 

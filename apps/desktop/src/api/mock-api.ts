@@ -17,6 +17,7 @@ import type {
   ProjectExecutionPolicy, PermissionAction, PermissionDecision,
   UpdateProjectPolicyInput, PermissionCheckResult, MissionJob,
   CancelMissionJobInput,
+  PatchProposal, CreatePatchProposalInput, ApplyPatchInput,
 } from "@fluxora/shared";
 import { buildVoiceContext } from "@fluxora/voice-context";
 
@@ -1414,6 +1415,48 @@ export function createMockAPI(): FluxoraAPI {
       cancelJob: async (
         _input: CancelMissionJobInput,
       ): Promise<MissionJob | null> => null,
+    },
+    // PR 010 — Patch Engine (fallback mock fora do runtime
+    // Tauri). Os namespaces `patches` ficam disponíveis para
+    // a UI consumir em modo navegador; em runtime Tauri o
+    // `desktopBridge` sobrescreve este namespace com os
+    // comandos `patches_*` reais.
+    patches: {
+      ping: async () => new Date().toISOString(),
+      list: async (): Promise<PatchProposal[]> => [],
+      get: async (_id: string): Promise<PatchProposal | null> => null,
+      listByMission: async (
+        _missionId: string,
+      ): Promise<PatchProposal[]> => [],
+      create: async (
+        _input: CreatePatchProposalInput,
+      ): Promise<PatchProposal> => {
+        throw new Error(
+          "Patch Engine só funciona em runtime Tauri. Crie propostas via missions.createAndRun.",
+        );
+      },
+      apply: async (
+        _input: ApplyPatchInput,
+      ): Promise<PatchProposal> => {
+        throw new Error(
+          "Patch Engine só funciona em runtime Tauri. Aplique patches via approvals.approve em runtime Tauri.",
+        );
+      },
+      reject: async (
+        _id: string,
+        _note?: string,
+      ): Promise<PatchProposal> => {
+        throw new Error(
+          "Patch Engine só funciona em runtime Tauri.",
+        );
+      },
+      getChangedFiles: async (
+        _workflowRunId: string,
+      ): Promise<ChangedFile[]> => [],
+      getFileDiff: async (
+        _workflowRunId: string,
+        _filePath: string,
+      ): Promise<FileDiff | null> => null,
     },
   };
 }

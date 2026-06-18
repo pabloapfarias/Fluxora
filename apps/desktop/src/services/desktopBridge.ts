@@ -4,6 +4,7 @@ import type {
   AgentStepOutput,
   AiModelInfo,
   AiProviderConfig,
+  ApplyPatchInput,
   Approval,
   ApprovalImpact,
   AudioProviderSettings,
@@ -15,6 +16,7 @@ import type {
   ChatOnceRequest,
   ChatOnceResult,
   CreateMissionInput,
+  CreatePatchProposalInput,
   CreateProjectInput,
   ExecutionApproval,
   FluxoraAPI,
@@ -29,6 +31,7 @@ import type {
   OpenCodeCatalogResult,
   OpenCodeModel,
   OpenCodeProvider,
+  PatchProposal,
   PermissionAction,
   PermissionCheckResult,
   Project,
@@ -872,6 +875,23 @@ function toLegacyApproval(input: ExecutionApproval): Approval {
   };
 }
 
+// PR 010 — Helpers para inspecionar o `payload` (tipo
+// `unknown`) de uma `ExecutionApproval` sem precisar de cast
+// no consumidor. O backend Rust pode salvar
+// `{ "proposalId": "...", "source": "mission-engine" }` no
+// payload (ver `approvals::create_approval_from_permissions_check`).
+function payloadGetProposalId(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") return null;
+  const obj = payload as Record<string, unknown>;
+  const v = obj.proposalId;
+  if (typeof v === "string" && v.length > 0) return v;
+  return null;
+}
+
+function payloadHasProposalId(payload: unknown): boolean {
+  return payloadGetProposalId(payload) !== null;
+}
+
 // PR 009 — Conversão `MissionJob` → `BackgroundWorkflowJob`
 // legado. A UI existente consome o tipo
 // `BackgroundWorkflowJob` (com `strategy`).
@@ -1071,6 +1091,103 @@ async function createAndRunMissionInternal(
   input: CreateMissionInput,
 ): Promise<MissionRun> {
   return await invoke<MissionRun>("missions_create_and_run", { payload: input });
+}
+
+// ---------------------------------------------------------------------------
+// Patches (PR 010)
+// ---------------------------------------------------------------------------
+//
+// Helpers de baixo nível para os comandos `patches_*` do
+// Patch Engine. Em runtime Tauri, delegam para o backend Rust
+// real; fora, devolvem null/[] (o mock legado é
+// responsabilidade do `mock-api.ts`).
+
+async function listPatchesTauri(): Promise<PatchProposal[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<PatchProposal[]>("patches_list", {});
+  } catch (error) {
+    console.warn("[desktopBridge] patches_list falhou, usando []", error);
+    return [];
+  }
+}
+
+async function getPatchTauri(id: string): Promise<PatchProposal | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<PatchProposal | null>("patches_get", { id });
+  } catch (error) {
+    console.warn("[desktopBridge] patches_get falhou", error);
+    return null;
+  }
+}
+
+async function listPatchesByMissionTauri(
+  missionId: string,
+): Promise<PatchProposal[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<PatchProposal[]>("patches_list_by_mission", { missionId });
+  } catch (error) {
+    console.warn(
+      "[desktopBridge] patches_list_by_mission falhou, usando []",
+      error
+    );
+    return [];
+  }
+}
+
+async function createPatchTauri(
+  input: CreatePatchProposalInput,
+): Promise<PatchProposal> {
+  return await invoke<PatchProposal>("patches_create", { payload: input });
+}
+
+async function applyPatchTauri(input: ApplyPatchInput): Promise<PatchProposal> {
+  return await invoke<PatchProposal>("patches_apply", { payload: input });
+}
+
+async function rejectPatchTauri(
+  id: string,
+  note?: string,
+): Promise<PatchProposal> {
+  return await invoke<PatchProposal>("patches_reject", {
+    payload: { id, note },
+  });
+}
+
+async function getChangedFilesPatchesTauri(
+  workflowRunId: string,
+): Promise<Array<Record<string, unknown>>> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<Array<Record<string, unknown>>>(
+      "patches_get_changed_files",
+      { workflowRunId }
+    );
+  } catch (error) {
+    console.warn(
+      "[desktopBridge] patches_get_changed_files falhou, usando []",
+      error
+    );
+    return [];
+  }
+}
+
+async function getFileDiffPatchesTauri(
+  workflowRunId: string,
+  filePath: string,
+): Promise<Record<string, unknown> | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<Record<string, unknown> | null>(
+      "patches_get_file_diff",
+      { workflowRunId, filePath }
+    );
+  } catch (error) {
+    console.warn("[desktopBridge] patches_get_file_diff falhou", error);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1562,14 +1679,78 @@ export function createDesktopBridge(): FluxoraAPI {
         }
         return mock.workflows.cancelJob(jobId);
       },
-      async approveFinal(_id: string): Promise<any> {
-        // Sem aprovação real nesta PR (sem patch aplicado).
-        // Mantém mock para a UI não quebrar.
-        return mock.workflows.approveFinal(_id);
+      async approveFinal(id: string): Promise<Approval> {
+        // PR 010 — Aprova a `ExecutionApproval` final vinculada
+        // à missão (via `approvals.listActionable` filtrando
+        // `missionId === id`) e, se houver uma `PatchProposal`
+        // pendente, dispara `patches_apply` em background. O
+        // `approvals.approve` backend (PR 010) também dispara
+        // `patches_apply` automaticamente, então esta rota
+        // serve apenas como fallback explícito.
+        if (isTauriRuntime()) {
+          try {
+            // 1. Localiza a aprovação vinculada à missão.
+            const actionable = await listActionableApprovalsTauri();
+            const linked = actionable.find(
+              (a) => a.missionId === id || payloadHasProposalId(a.payload)
+            );
+            if (linked) {
+              // 2. Aprova via Tauri (o backend dispara
+              //    `patches_apply` automaticamente se for
+              //    uma aprovação de `apply-patch`).
+              const approved = await approveApprovalTauri(linked.id);
+              return toLegacyApproval(approved);
+            }
+            // Sem aprovação vinculada: cai no mock legado
+            // (preserva o comportamento da UI no caso de
+            // missões que não geraram patch).
+            return mock.workflows.approveFinal(id);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] workflows.approveFinal falhou, usando mock",
+              error
+            );
+            return mock.workflows.approveFinal(id);
+          }
+        }
+        return mock.workflows.approveFinal(id);
       },
-      async rejectFinal(_id: string, _note?: string): Promise<any> {
-        // Sem rejeição real nesta PR.
-        return mock.workflows.rejectFinal(_id, _note);
+      async rejectFinal(id: string, note?: string): Promise<Approval> {
+        // PR 010 — Rejeita a `ExecutionApproval` final vinculada
+        // à missão e marca a `PatchProposal` como `rejected`.
+        if (isTauriRuntime()) {
+          try {
+            const actionable = await listActionableApprovalsTauri();
+            const linked = actionable.find(
+              (a) => a.missionId === id || payloadHasProposalId(a.payload)
+            );
+            if (linked) {
+              const rejected = await rejectApprovalTauri(linked.id);
+              // Tenta também rejeitar a PatchProposal
+              // vinculada (best-effort).
+              const proposalId = payloadGetProposalId(linked.payload);
+              if (proposalId) {
+                try {
+                  await rejectPatchTauri(proposalId, note);
+                } catch (error) {
+                  console.warn(
+                    "[desktopBridge] rejectPatchTauri falhou",
+                    error
+                  );
+                }
+              }
+              return toLegacyApproval(rejected);
+            }
+            return mock.workflows.rejectFinal(id, note);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] workflows.rejectFinal falhou, usando mock",
+              error
+            );
+            return mock.workflows.rejectFinal(id, note);
+          }
+        }
+        return mock.workflows.rejectFinal(id, note);
       },
       async getStepOutputs(workflowRunId: string): Promise<AgentStepOutput[]> {
         if (isTauriRuntime()) {
@@ -1812,11 +1993,52 @@ export function createDesktopBridge(): FluxoraAPI {
       async diff(projectId: string, filePath: string): Promise<string> {
         return diffProjectFile(mock, projectId, filePath);
       },
-      // `changedFiles` e `fileDiff` continuam mockados porque
-      // dependem do workflow engine, que será migrado em PR
-      // dedicada (PR 007 — Mission Engine).
-      changedFiles: mock.git.changedFiles.bind(mock.git),
-      fileDiff: mock.git.fileDiff.bind(mock.git),
+      // PR 010 — `changedFiles(workflowRunId)` e
+      // `fileDiff(workflowRunId, filePath)` agora são
+      // alimentados pelo Patch Engine real em runtime Tauri
+      // (conversão de `PatchFileChange[]` para as formas
+      // legadas `ChangedFile` / `FileDiff` consumidas pela
+      // UI). Fora do runtime Tauri, o mock legado é
+      // preservado.
+      async changedFiles(workflowRunId: string) {
+        if (isTauriRuntime()) {
+          try {
+            const raw = await getChangedFilesPatchesTauri(workflowRunId);
+            // O backend devolve a forma canônica nova
+            // (camelCase com `id`, `workflowRunId`, `projectId`,
+            // `path`, `status`, `additions`, `deletions`,
+            // `createdAt`) — já no formato esperado pela UI.
+            return raw as unknown as Awaited<
+              ReturnType<typeof mock.git.changedFiles>
+            >;
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] git.changedFiles falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.git.changedFiles(workflowRunId);
+      },
+      async fileDiff(workflowRunId: string, filePath: string) {
+        if (isTauriRuntime()) {
+          try {
+            const raw = await getFileDiffPatchesTauri(
+              workflowRunId,
+              filePath
+            );
+            return raw as unknown as Awaited<
+              ReturnType<typeof mock.git.fileDiff>
+            >;
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] git.fileDiff falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.git.fileDiff(workflowRunId, filePath);
+      },
     },
     events: {
       // PR 008 — `events.list(workflowRunId)` agora delega para
@@ -2058,6 +2280,111 @@ export function createDesktopBridge(): FluxoraAPI {
           }
         }
         return null;
+      },
+    },
+    // PR 010 — Patch Engine (superfície canônica nova).
+    // Em runtime Tauri, delega para os comandos `patches_*`.
+    // Fora do runtime Tauri, cai no fallback do `mock-api.ts`
+    // (que devolve stubs para a UI não quebrar).
+    patches: {
+      ping(): Promise<string> {
+        if (isTauriRuntime()) {
+          return invoke<string>("patches_ping", {});
+        }
+        return mock.patches.ping();
+      },
+      async list(): Promise<PatchProposal[]> {
+        if (isTauriRuntime()) {
+          try {
+            return await listPatchesTauri();
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] patches.list falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.patches.list();
+      },
+      async get(id: string): Promise<PatchProposal | null> {
+        if (isTauriRuntime()) {
+          try {
+            return await getPatchTauri(id);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] patches.get falhou, usando mock",
+              error
+            );
+            return null;
+          }
+        }
+        return mock.patches.get(id);
+      },
+      async listByMission(missionId: string): Promise<PatchProposal[]> {
+        if (isTauriRuntime()) {
+          try {
+            return await listPatchesByMissionTauri(missionId);
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] patches.listByMission falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.patches.listByMission(missionId);
+      },
+      async create(input: CreatePatchProposalInput): Promise<PatchProposal> {
+        if (isTauriRuntime()) {
+          return await createPatchTauri(input);
+        }
+        return mock.patches.create(input);
+      },
+      async apply(input: ApplyPatchInput): Promise<PatchProposal> {
+        if (isTauriRuntime()) {
+          return await applyPatchTauri(input);
+        }
+        return mock.patches.apply(input);
+      },
+      async reject(id: string, note?: string): Promise<PatchProposal> {
+        if (isTauriRuntime()) {
+          return await rejectPatchTauri(id, note);
+        }
+        return mock.patches.reject(id, note);
+      },
+      async getChangedFiles(workflowRunId: string) {
+        if (isTauriRuntime()) {
+          try {
+            const raw = await getChangedFilesPatchesTauri(workflowRunId);
+            return raw as unknown as Awaited<
+              ReturnType<typeof mock.patches.getChangedFiles>
+            >;
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] patches.getChangedFiles falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.patches.getChangedFiles(workflowRunId);
+      },
+      async getFileDiff(workflowRunId: string, filePath: string) {
+        if (isTauriRuntime()) {
+          try {
+            const raw = await getFileDiffPatchesTauri(
+              workflowRunId,
+              filePath
+            );
+            return raw as unknown as Awaited<
+              ReturnType<typeof mock.patches.getFileDiff>
+            >;
+          } catch (error) {
+            console.warn(
+              "[desktopBridge] patches.getFileDiff falhou, usando mock",
+              error
+            );
+          }
+        }
+        return mock.patches.getFileDiff(workflowRunId, filePath);
       },
     },
   };

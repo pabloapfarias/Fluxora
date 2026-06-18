@@ -1991,6 +1991,112 @@ export interface CancelMissionJobInput {
   reason?: string;
 }
 
+// ============================================================================
+// PR 010 — Aplicação controlada de patch/diff
+// ============================================================================
+//
+// Esta camada adiciona o Patch Engine do FluxoraV1. Permite que
+// missões proponham alterações em formato estruturado
+// (bloco `fluxora_patch` na resposta do provider) e que essas
+// alterações sejam aplicadas de forma controlada, respeitando
+// a política do projeto e exigindo aprovação explícita quando
+// a decisão da permissão for `ask`.
+//
+// O patch nunca é aplicado sem:
+// 1. `apply-patch` / `write-files` / `create-files` /
+//    `delete-files` serem permitidos pela política do projeto
+//    (ou aprovados via `ExecutionApproval`).
+// 2. Path do arquivo ser relativo, não conter `..` e não estar
+//    em diretórios proibidos (`.git`, `node_modules`, `dist`,
+//    `target`, etc.).
+// 3. Limites de tamanho respeitados (256 KiB por arquivo,
+//    1 MiB total, 20 arquivos por proposta).
+//
+// Esta PR NÃO faz commit, push, checkout, reset, merge, rebase
+// ou qualquer operação destrutiva fora do diretório do projeto.
+// A aplicação de patch é estritamente controlada e sempre
+// registrada em eventos `patch/*` no barramento
+// `fluxora-event`.
+
+/** Tipo de operação de patch sobre um arquivo. */
+export type PatchOperation = "create" | "modify" | "delete";
+
+/** Status do ciclo de vida de uma `PatchProposal`. */
+export type PatchProposalStatus =
+  | "draft"
+  | "pending_approval"
+  | "approved"
+  | "applied"
+  | "rejected"
+  | "failed";
+
+/** Mudança proposta para um único arquivo dentro de uma `PatchProposal`. */
+export interface PatchFileChange {
+  path: string;
+  operation: PatchOperation;
+  /**
+   * Conteúdo antes da alteração (snapshot do arquivo no momento
+   * em que a proposta foi criada). Usado para validar que o
+   * arquivo ainda está no estado esperado antes de aplicar o
+   * `afterContent`. Opcional — quando ausente, o backend não
+   * faz a checagem de pré-condição.
+   */
+  beforeContent?: string;
+  /**
+   * Conteúdo final desejado para o arquivo. Obrigatório para
+   * `create` e `modify`. Não deve ser enviado para `delete`.
+   */
+  afterContent?: string;
+  /**
+   * Diff unificado opcional gerado pelo provider ou pelo
+   * backend para exibição na UI. Quando ausente, o backend
+   * calcula a partir de `beforeContent` / `afterContent`.
+   */
+  unifiedDiff?: string;
+  /** Linhas adicionadas estimadas. Preenchido pelo backend se ausente. */
+  additions?: number;
+  /** Linhas removidas estimadas. Preenchido pelo backend se ausente. */
+  deletions?: number;
+  /** Conveniência derivada: `operation === "create"`. Preenchido pelo backend. */
+  isNewFile?: boolean;
+  /** Conveniência derivada: `operation === "delete"`. Preenchido pelo backend. */
+  isDeletedFile?: boolean;
+}
+
+/** Proposta de patch vinculada a uma missão. */
+export interface PatchProposal {
+  id: string;
+  missionId: string;
+  projectId: string;
+  status: PatchProposalStatus;
+  title: string;
+  summary?: string;
+  files: PatchFileChange[];
+  /** `ExecutionApproval` vinculada (quando status é `pending_approval`). */
+  approvalId?: string;
+  createdAt: string;
+  updatedAt: string;
+  appliedAt?: string;
+  /** Mensagem de erro quando `status === "failed"`. Nunca inclui API key. */
+  error?: string;
+}
+
+/** Input aceito por `patches_create` (criação de proposta). */
+export interface CreatePatchProposalInput {
+  missionId: string;
+  projectId: string;
+  title: string;
+  summary?: string;
+  files: PatchFileChange[];
+}
+
+/** Input aceito por `patches_apply` (aplicação da proposta). */
+export interface ApplyPatchInput {
+  proposalId: string;
+  /** `ExecutionApproval` aprovada que autorizou a aplicação. */
+  approvalId?: string;
+}
+
 // IPC API types
 export interface FluxoraAPI {
   projects: {
@@ -2018,7 +2124,20 @@ export interface FluxoraAPI {
     getJob(jobId: string): Promise<BackgroundWorkflowJob | null>;
     listJobs(): Promise<BackgroundWorkflowJob[]>;
     cancelJob(jobId: string): Promise<void>;
+    /**
+     * PR 010 — Aprova a aprovação final vinculada à missão
+     * (`apply-patch` ou similar) e, se houver proposta de patch
+     * pendente, dispara a aplicação segura. Em runtime Tauri
+     * delega para `patches_apply` + `approvals_approve`; fora,
+     * cai no mock legado (sem patch aplicado).
+     */
     approveFinal(id: string): Promise<Approval>;
+    /**
+     * PR 010 — Rejeita a aprovação final vinculada à missão e
+     * marca a proposta de patch como `rejected`. Em runtime
+     * Tauri delega para `patches_reject` + `approvals_reject`;
+     * fora, cai no mock legado.
+     */
     rejectFinal(id: string, note?: string): Promise<Approval>;
     getStepOutputs(workflowRunId: string): Promise<AgentStepOutput[]>;
     listAgentOutputs(workflowRunId: string): Promise<AgentStepOutput[]>;
@@ -2033,8 +2152,9 @@ export interface FluxoraAPI {
   // `workflows.runReal` / `workflows.runRealAsync` / `workflows.rerun`
   // são redirecionadas para os comandos `missions_*` quando em
   // runtime Tauri, convertendo os tipos conforme necessário. Os
-  // métodos `workflows.approveFinal` / `rejectFinal` permanecem
-  // mockados nesta PR (sem aprovação real, sem patch real).
+  // métodos `workflows.approveFinal` / `rejectFinal` passam a
+  // ser reais em runtime Tauri na PR 010 (aprovam/rejeitam
+  // propostas de patch e disparam aplicação controlada).
   //
   // Componentes novos podem consumir `window.fluxora.missions.*`
   // diretamente para evitar a camada de adaptação.
@@ -2128,6 +2248,58 @@ export interface FluxoraAPI {
      * `missions_run` ser chamado.
      */
     cancelJob(input: CancelMissionJobInput): Promise<MissionJob | null>;
+  };
+  // ============================================================================
+  // PR 010 — Patch Engine próprio
+  // ============================================================================
+  //
+  // Superfície canônica nova para propostas de patch em runtime
+  // Tauri. O `desktopBridge` decide se delega para o backend
+  // Rust (em runtime Tauri) ou cai no fallback do `mock-api.ts`
+  // (no navegador/Vite dev).
+  //
+  // Os métodos `git.changedFiles(workflowRunId)` e
+  // `git.fileDiff(workflowRunId, filePath)` da UI atual
+  // continuam sendo a forma consumida pelo Diff Viewer — o
+  // `desktopBridge` faz a ponte para o Patch Engine em runtime
+  // Tauri. Componentes novos podem usar `patches.*`
+  // diretamente para evitar a camada de adaptação.
+  patches: {
+    /** Health-check do Patch Engine. */
+    ping(): Promise<string>;
+    /** Lista todas as propostas de patch persistidas (mais recentes primeiro). */
+    list(): Promise<PatchProposal[]>;
+    /** Retorna uma proposta de patch por `id` (ou `null` se não existir). */
+    get(proposalId: string): Promise<PatchProposal | null>;
+    /** Lista todas as propostas de patch de uma missão (mais recentes primeiro). */
+    listByMission(missionId: string): Promise<PatchProposal[]>;
+    /** Cria uma nova proposta de patch (status inicial: `draft` ou `pending_approval`). */
+    create(input: CreatePatchProposalInput): Promise<PatchProposal>;
+    /**
+     * Aplica uma proposta de patch. Exige que a política do
+     * projeto permita `apply-patch` / `write-files` /
+     * `create-files` / `delete-files` (conforme cada operação)
+     * OU que uma `ExecutionApproval` aprovada tenha autorizado
+     * a ação. Aplica cada arquivo de forma atômica quando
+     * possível; em caso de erro em um arquivo, marca a
+     * proposta como `failed` e emite `patch/apply-failed`.
+     */
+    apply(input: ApplyPatchInput): Promise<PatchProposal>;
+    /** Rejeita (cancela) uma proposta de patch pendente. Marca como `rejected`. */
+    reject(proposalId: string, note?: string): Promise<PatchProposal>;
+    /**
+     * Equivalente a `git.changedFiles(workflowRunId)` no Patch
+     * Engine. Converte os `PatchFileChange` da proposta em
+     * `ChangedFile` legados consumidos pelo Diff Viewer.
+     */
+    getChangedFiles(workflowRunId: string): Promise<ChangedFile[]>;
+    /**
+     * Equivalente a `git.fileDiff(workflowRunId, filePath)` no
+     * Patch Engine. Devolve um `FileDiff` legado com `diff`,
+     * `additions` / `deletions` calculados, e o status
+     * (`added` / `modified` / `deleted`).
+     */
+    getFileDiff(workflowRunId: string, filePath: string): Promise<FileDiff | null>;
   };
   agents: {
     list(): Promise<Agent[]>;
