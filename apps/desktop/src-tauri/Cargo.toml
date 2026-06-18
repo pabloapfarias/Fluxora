@@ -1,0 +1,20 @@
+[package]
+name = "fluxora_v1"
+version = "0.1.0"
+description = "Fluxora desktop shell migrated from Electron to Tauri"
+authors = ["Pablo"]
+edition = "2021"
+
+[lib]
+name = "fluxora_v1_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.8.5", features = [] }
+tauri-plugin-dialog = "2"
+time = { version = "0.3", features = ["formatting"] }

@@ -1,0 +1,500 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+
+  /* Base backgrounds - deep black cockpit */
+  --bg-base: #030303;
+  --bg-deep: #060606;
+  --bg-surface: #0b0b0d;
+  --bg-elevated: #111114;
+  --bg-card: #151518;
+
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Text */
+  --text-primary: #f7f7f5;
+  --text-secondary: #a6a6a6;
+  --text-muted: #6f6f76;
+
+  /* Primary accent - VIOLET (brand color) */
+  --accent: #7c5bf5;
+  --accent-hover: #9074f5;
+  --accent-muted: #5e41c4;
+  --accent-soft: rgba(124, 91, 245, 0.15);
+
+  /* Terminal/Logs - AMBER */
+  --accent-terminal: #f5a524;
+  --accent-terminal-muted: rgba(245, 165, 36, 0.16);
+
+  /* Status colors */
+  --success: #22c55e;
+  --warning: #f5a524;
+  --danger: #ff4d4d;
+
+  /* Info - cyan ONLY for minor technical details */
+  --blue-info: #38bdf8;
+
+  /* Derived backgrounds */
+  --bg-input: #0b0b0d;
+  --bg-card-hover: #1a1a1f;
+
+  /* Soft status colors */
+  --success-soft: rgba(34, 197, 94, 0.12);
+  --warning-soft: rgba(245, 165, 36, 0.12);
+  --error-soft: rgba(255, 77, 77, 0.12);
+
+  /* Accent ring */
+  --accent-ring: rgba(124, 91, 245, 0.3);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1a2540;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2e3d65;
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+@layer components {
+  .flux-section-title {
+    @apply text-[11px] font-semibold uppercase tracking-[0.12em];
+    color: var(--text-muted);
+  }
+
+  .flux-pill {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium;
+  }
+
+  .flux-pill-accent {
+    background-color: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid rgba(124, 91, 245, 0.3);
+  }
+
+  .flux-pill-success {
+    background-color: var(--success-soft);
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+  }
+
+  .flux-pill-warning {
+    background-color: var(--warning-soft);
+    color: var(--warning);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+  }
+
+  .flux-pill-error {
+    background-color: var(--error-soft);
+    color: var(--error);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+  }
+
+  .flux-pill-muted {
+    background-color: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .flux-divider {
+    height: 1px;
+    width: 100%;
+    background-color: var(--border-subtle);
+  }
+
+  .flux-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors no-drag;
+  }
+
+  .flux-btn-primary {
+    background-color: var(--accent);
+    color: #fff;
+    box-shadow: 0 6px 18px -8px rgba(124, 91, 245, 0.6);
+  }
+
+  .flux-btn-primary:hover {
+    background-color: var(--accent-hover);
+  }
+
+  .flux-btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .flux-btn-secondary {
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .flux-btn-secondary:hover {
+    background-color: var(--bg-card-hover);
+    border-color: var(--border-strong);
+  }
+
+  .flux-btn-ghost {
+    color: var(--text-secondary);
+    background-color: transparent;
+  }
+
+  .flux-btn-ghost:hover {
+    color: var(--text-primary);
+    background-color: var(--bg-input);
+  }
+
+  .flux-btn-success {
+    background-color: var(--success-soft);
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+  }
+
+  .flux-btn-danger {
+    background-color: var(--error-soft);
+    color: var(--error);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
+  .flux-input {
+    @apply w-full rounded-lg outline-none transition-colors;
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+  }
+
+  .flux-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .flux-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+}
+
+.flux-grid-bg {
+  background-image: radial-gradient(rgba(124, 91, 245, 0.06) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: -1px -1px;
+}
+
+.flux-glow-accent {
+  box-shadow: 0 0 0 1px rgba(124, 91, 245, 0.4), 0 0 24px -4px rgba(124, 91, 245, 0.45);
+}
+
+.flux-glow-violet {
+  box-shadow: 0 0 0 1px rgba(124, 91, 245, 0.4), 0 0 24px -4px rgba(124, 91, 245, 0.45);
+}
+
+@keyframes flux-pulse-soft {
+  0%, 100% { opacity: 0.55; transform: scale(0.95); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.flux-pulse-dot {
+  animation: flux-pulse-soft 1.6s ease-in-out infinite;
+}
+
+@keyframes flux-bar {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+
+.flux-wave-bar {
+  transform-origin: center;
+  animation: flux-bar 1.1s ease-in-out infinite;
+}
+
+.flux-gradient-accent {
+  background-image: linear-gradient(135deg, rgba(124, 91, 245, 0.18), rgba(124, 91, 245, 0.12) 60%, rgba(16, 185, 129, 0.08));
+}
+
+.flux-shadow-inset-line {
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.03);
+}
+
+/* ─── Cockpit utilities ─── */
+
+.flux-cockpit-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.03);
+}
+
+.flux-cockpit-card-elevated {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.04),
+    0 8px 32px -12px rgba(0, 0, 0, 0.6);
+}
+
+  .flux-terminal {
+    background-color: var(--bg-deep);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
+  }
+
+  /* ─── Source chips (terminal logs) ─── */
+
+  .flux-chip-default {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
+    background-color: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    min-width: 88px;
+    justify-content: center;
+  }
+
+  .flux-chip-warning {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
+    background-color: var(--warning-soft);
+    color: var(--warning);
+    border: 1px solid rgba(245, 165, 36, 0.18);
+    min-width: 88px;
+    justify-content: center;
+  }
+
+  .flux-chip-success {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
+    background-color: var(--success-soft);
+    color: var(--success);
+    border: 1px solid rgba(34, 197, 94, 0.18);
+    min-width: 88px;
+    justify-content: center;
+  }
+
+  .flux-chip-error {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", ui-monospace, monospace;
+    background-color: var(--error-soft);
+    color: var(--error);
+    border: 1px solid rgba(255, 77, 77, 0.2);
+    min-width: 88px;
+    justify-content: center;
+  }
+
+  /* ─── Terminal scrollbar ─── */
+
+  .flux-terminal-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+  }
+
+  .flux-terminal-scroll::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .flux-terminal-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .flux-terminal-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background-clip: content-box;
+  }
+
+  .flux-terminal-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.16);
+    background-clip: content-box;
+    border: 1px solid transparent;
+  }
+
+.flux-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.flux-mission-title {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--text-primary);
+}
+
+.flux-mission-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.flux-body-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.flux-secondary-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.flux-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+}
+
+.flux-kpi-value {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.flux-kpi-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.flux-command-console {
+  background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-elevated) 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.04),
+    0 12px 40px -16px rgba(0, 0, 0, 0.7),
+    0 0 0 1px rgba(124, 91, 245, 0.06);
+}
+
+.flux-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border-subtle);
+  background-color: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.flux-badge-accent {
+  background-color: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(124, 91, 245, 0.3);
+}
+
+.flux-badge-success {
+  background-color: var(--success-soft);
+  color: var(--success);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.flux-badge-warning {
+  background-color: var(--warning-soft);
+  color: var(--warning);
+  border-color: rgba(245, 165, 36, 0.2);
+}
