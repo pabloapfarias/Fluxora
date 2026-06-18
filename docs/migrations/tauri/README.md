@@ -83,6 +83,42 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   há providers cadastrados. UI preservada; sem streaming,
   sem tool calling, sem Mission Engine, sem agente real,
   sem piloto automático, sem storage seguro de secrets.
+- [PR 008 — Mission Engine inicial](./STATUS_MIGRATION_TAURI_PR_008_MISSION_ENGINE.md)
+  Cria o primeiro Mission Engine real do FluxoraV1 em
+  Rust/Tauri, conectando projetos reais, filesystem/Git
+  reais, Provider Engine próprio (PR 007) e o barramento
+  de eventos real (PR 005). Módulo `missions.rs` com
+  `MissionsState` persistido em
+  `<app_data_dir>/fluxora/missions.json`, 8 comandos Tauri
+  (`missions_ping` / `missions_list` / `missions_get` /
+  `missions_create` / `missions_run` /
+  `missions_create_and_run` / `missions_list_logs` /
+  `missions_clear`), coleta de contexto do projeto
+  conservadora (10 arquivos × 32 KiB × 128 KiB total,
+  ignora binários e UTF-8 inválido), prompt interno
+  seguro (modo propositivo / read-only), resolução
+  automática de provider/model, e 6 tipos de evento
+  `mission/*` no barramento `fluxora-event`:
+  `mission/created` / `mission/started` / `mission/phase`
+  / `mission/log` / `mission/completed` / `mission/failed`.
+  Integração com o Provider Engine via
+  `providers::execute_mission_chat` (helper público
+  adicionado em `providers.rs` que reaproveita o adapter
+  OpenAI-compatible sem duplicar HTTP client nem emitir
+  `provider/*` events). `desktopBridge` adiciona o
+  namespace `missions` (canônico novo) e sobrescreve
+  `window.fluxora.workflows.*` em runtime Tauri para
+  preservar a API legada da UI (converte `MissionRun`
+  ↔ `WorkflowRun` e `MissionLog` ↔ `WorkflowEvent`),
+  além de adaptar `events.list(workflowRunId)` para usar
+  `missions_list_logs`. `voice.createFromTranscript`
+  continua mock (frontend-side, `buildVoiceContext`).
+  Missão inicial é estritamente read-only/propositiva:
+  não aplica patches, não executa comandos de shell,
+  não faz Git write operations, não usa OpenCode como
+  motor. UI preservada; sem piloto automático, sem
+  scheduler, sem agente real, sem streaming, sem tool
+  calling, sem storage seguro de secrets.
 
 ## Convenções aplicadas em todas as PRs
 
