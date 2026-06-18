@@ -67,6 +67,7 @@ use std::sync::Mutex;
 use std::time::SystemTime;
 use tauri::{AppHandle, Manager};
 
+use crate::agents;
 use crate::events;
 use crate::patches;
 use crate::permissions;
@@ -765,6 +766,7 @@ const FLUXORA_PATCH_END: &str = "```";
 
 /// Resultado do parser do bloco `fluxora_patch`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct FluxoraPatchExtract {
     /// Texto original sem o bloco `fluxora_patch` (limpo).
     pub cleaned_text: String,
@@ -1258,8 +1260,8 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         })),
     );
 
-    // 4. Construir prompt
-    let messages =
+    // 4. Construir prompt base (reusado pelo contexto do Agent Engine)
+    let _messages =
         build_mission_prompt(&running.prompt, &project_name, &project_stack, &context_text);
     let _ = update_mission(&state, &running.id, |m| {
         m.current_phase = Some("planning".to_string());
@@ -1271,7 +1273,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         &running,
         "planning",
         Some(serde_json::json!({
-            "messagesCount": messages.len(),
+            "messagesCount": _messages.len(),
         })),
     );
 
@@ -1309,24 +1311,24 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         return Err(error);
     }
 
-    let chat = providers::execute_mission_chat(
-        &app,
-        &provider.id,
-        &model,
-        &messages,
-        Some(2048),
-    );
-
-    let result_text = match chat {
-        Ok(res) => {
-            let payload = serde_json::json!({
-                "model": res.model,
-                "durationMs": res.duration_ms,
-                "textLength": res.text.chars().count(),
-            });
-            record_phase(&app, &state, &running, "response", Some(payload));
-            res.text
-        }
+    // PR 011 — Pipeline de 4 agentes sequenciais
+    // (Planner → Developer → QA → Finalizer). Substitui a
+    // antiga chamada única a `execute_mission_chat` da PR 008
+    // e a extração manual do `fluxora_patch` da PR 010. Cada
+    // agente tem seu próprio `AgentStepRecord` persistido em
+    // `agent_steps.json`, e o Developer já cuida do
+    // `extract_fluxora_patch_block` + `create_proposal_from_provider_text`.
+    let agent_ctx = agents::MissionAgentContext {
+        mission: &running,
+        user_prompt: &running.prompt,
+        project_name: &project_name,
+        project_stack: &project_stack,
+        context_text: &context_text,
+        default_provider_id: &provider.id,
+        default_model: &model,
+    };
+    let agents_result = match agents::run_mission_agents(&app, &agent_ctx) {
+        Ok(r) => r,
         Err(error) => {
             let truncated = truncate_error(&error);
             fail_mission(&app, &state, &running, &truncated, Some(&job_id));
@@ -1334,106 +1336,52 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         }
     };
 
-    // 6. PR 010 — Extrair o bloco `fluxora_patch` da resposta
-    //    do provider. Se houver um bloco válido, criar uma
-    //    `PatchProposal` (que pode ficar em `pending_approval`
-    //    se a política do projeto exigir).
-    let patch_extract = extract_fluxora_patch_block(&result_text);
-    if let Some(raw_json) = &patch_extract.raw_json {
-        eprintln!(
-            "[fluxora missions] bloco fluxora_patch detectado ({} bytes de JSON)",
-            raw_json.len()
+    // 6. PR 010 — Se o Developer gerou uma `PatchProposal`,
+    //    emitir `mission/phase` com o status final. A proposta
+    //    já foi criada pelo Agent Engine; aqui só refletimos o
+    //    resultado no MissionLog/eventos.
+    if let Some(proposal_id) = &agents_result.patch_proposal_id {
+        // Recarrega a proposta para descobrir o status final
+        // (pode ter virado `pending_approval`, `failed` ou
+        // permanecer `draft`).
+        let state_patches = app.state::<patches::PatchesState>();
+        let proposal_status = state_patches
+            .proposals
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .iter()
+                    .find(|p| p.id == *proposal_id)
+                    .map(|p| p.status.clone())
+            })
+            .unwrap_or_else(|| "draft".to_string());
+        let phase_label = match proposal_status.as_str() {
+            "pending_approval" => "patch-pending-approval",
+            "applied" => "patch-applied",
+            "failed" => "patch-failed",
+            _ => "patch-detected",
+        };
+        let _ = emit_mission_event(
+            &app,
+            "mission/phase",
+            &running.id,
+            Some(&running.project_id),
+            if proposal_status == "pending_approval" { "warn" } else { "info" },
+            &format!(
+                "Proposta de patch criada pelo Developer: {proposal_id} (status: {proposal_status})"
+            ),
+            Some(phase_label),
+            Some(serde_json::json!({
+                "proposalId": proposal_id,
+                "status": &proposal_status,
+            })),
         );
     }
-    let cleaned_text = patch_extract.cleaned_text.clone();
-    if let (Some(files), Some(title)) = (&patch_extract.files, &patch_extract.title) {
-        if !files.is_empty() {
-            // Tenta criar a proposta a partir do bloco.
-            match patches::create_proposal_from_provider_text(
-                &app,
-                &running,
-                title.clone(),
-                patch_extract.summary.clone(),
-                files.clone(),
-            ) {
-                Ok((proposal, log)) => {
-                    // Log no MissionLog
-                    let _ = append_log(
-                        &state,
-                        &running.id,
-                        "info",
-                        &log,
-                        Some("patch-detected"),
-                        Some(serde_json::json!({
-                            "proposalId": &proposal.id,
-                            "status": &proposal.status,
-                            "filesCount": proposal.files.len(),
-                            "approvalId": &proposal.approval_id,
-                        })),
-                    );
-                    // Emite mission/phase indicando o estado
-                    let phase_label = match proposal.status.as_str() {
-                        "pending_approval" => "patch-pending-approval",
-                        "applied" => "patch-applied",
-                        "failed" => "patch-failed",
-                        _ => "patch-detected",
-                    };
-                    let _ = emit_mission_event(
-                        &app,
-                        "mission/phase",
-                        &running.id,
-                        Some(&running.project_id),
-                        if proposal.status == "pending_approval" { "warn" } else { "info" },
-                        &format!(
-                            "Proposta de patch detectada: {} (status: {})",
-                            proposal.title, proposal.status
-                        ),
-                        Some(phase_label),
-                        Some(serde_json::json!({
-                            "proposalId": &proposal.id,
-                            "status": &proposal.status,
-                            "filesCount": proposal.files.len(),
-                            "approvalId": &proposal.approval_id,
-                        })),
-                    );
-                }
-                Err(error) => {
-                    // Patch inválido (paths proibidos, decisão
-                    // `deny` na política, etc.). A missão
-                    // continua como read-only e o erro é
-                    // registrado como log + evento
-                    // `mission/phase` com `patch-skipped`.
-                    let _ = append_log(
-                        &state,
-                        &running.id,
-                        "warn",
-                        &format!("Proposta de patch ignorada: {error}"),
-                        Some("patch-skipped"),
-                        Some(serde_json::json!({
-                            "errorMessage": truncate_error(&error),
-                        })),
-                    );
-                    let _ = emit_mission_event(
-                        &app,
-                        "mission/phase",
-                        &running.id,
-                        Some(&running.project_id),
-                        "warn",
-                        "Proposta de patch ignorada por validação/política.",
-                        Some("patch-skipped"),
-                        Some(serde_json::json!({
-                            "errorMessage": truncate_error(&error),
-                        })),
-                    );
-                }
-            }
-        }
-    }
 
-    // 7. Final report — usa o `cleaned_text` (sem o bloco
-    //    `fluxora_patch`) para que o `resultText` da missão
-    //    seja o texto humano-legível.
-    let final_text = cleaned_text;
+    // 7. Final report — usa o output do Finalizer (que já
+    //    incorpora o resumo do Developer/QA + a info do patch).
+    let final_text = agents_result.finalizer_output;
     let _ = update_mission(&state, &running.id, |m| {
         m.current_phase = Some("final-report".to_string());
         m.result_text = Some(final_text.clone());

@@ -1,7 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  Agent,
+  AgentConfig,
   AgentStepOutput,
+  AgentStepRecord,
   AiModelInfo,
   AiProviderConfig,
   ApplyPatchInput,
@@ -15,6 +18,7 @@ import type {
   CancelMissionJobInput,
   ChatOnceRequest,
   ChatOnceResult,
+  CreateAgentConfigInput,
   CreateMissionInput,
   CreatePatchProposalInput,
   CreateProjectInput,
@@ -39,6 +43,7 @@ import type {
   ProviderTestResult,
   RunMissionInput,
   SelectDirectoryResult,
+  UpdateAgentConfigInput,
   UpdateProjectInput,
   UpdateProjectPolicyInput,
   ValidatePathResult,
@@ -751,11 +756,50 @@ function toWorkflowEvent(
 }
 
 /**
+ * PR 011 — Constrói `AgentStepOutput` legados a partir dos
+ * `AgentStepRecord` reais persistidos pelo Agent Engine no
+ * backend Rust. Mapeia o status novo (`pending` / `running` /
+ * `completed` / `failed` / `skipped`) para o status legado
+ * (`running` / `completed` / `failed` / `cancelled`).
+ *
+ * A UI atual consome `AgentStepOutput` via
+ * `AgentStepOutputPanel`, `ExecutionDetailPage` e
+ * `useUsageStats` — o `desktopBridge` faz a ponte para os
+ * steps reais do backend.
+ */
+function toLegacyAgentStepOutput(step: AgentStepRecord): AgentStepOutput {
+  const legacyStatus: AgentStepOutput["status"] =
+    step.status === "completed"
+      ? "completed"
+      : step.status === "failed"
+      ? "failed"
+      : step.status === "running" || step.status === "pending"
+      ? "running"
+      : "cancelled";
+  return {
+    id: step.id,
+    workflowRunId: step.missionId,
+    projectId: step.projectId,
+    stepId: step.agentId,
+    agentRole: step.role,
+    agentName: step.agentName,
+    prompt: step.inputSummary ?? "",
+    output: step.outputText ?? step.outputSummary ?? "",
+    parsedOutput: step.metadata ? JSON.stringify(step.metadata) : undefined,
+    status: legacyStatus,
+    startedAt: step.startedAt ?? step.createdAt,
+    completedAt: step.completedAt,
+  };
+}
+
+/**
  * Constrói 3 `AgentStepOutput` sintéticos a partir dos logs
- * persistidos de uma missão. A UI atual espera
- * `getStepOutputs(workflowRunId)` retornando algo nessa
- * forma — então derivamos Planner / Provider Call / Final Report
- * com status/timing baseados nos logs reais.
+ * persistidos de uma missão. **USADO APENAS QUANDO NÃO HÁ
+ * steps reais disponíveis** (missões antigas geradas antes da
+ * PR 011, ou fallback fora do runtime Tauri). A UI atual
+ * espera `getStepOutputs(workflowRunId)` retornando algo
+ * nessa forma — então derivamos Planner / Provider Call /
+ * Final Report com status/timing baseados nos logs reais.
  */
 function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStepOutput[] {
   const findFirstTimestamp = (predicate: (log: MissionLog) => boolean): string | undefined => {
@@ -763,14 +807,6 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
       if (predicate(log)) return log.timestamp;
     }
     return undefined;
-  };
-
-  const findLastTimestamp = (predicate: (log: MissionLog) => boolean): string | undefined => {
-    let last: string | undefined;
-    for (const log of logs) {
-      if (predicate(log)) last = log.timestamp;
-    }
-    return last;
   };
 
   const isPhase = (phase: string) => (log: MissionLog) => log.phase === phase;
@@ -846,6 +882,34 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
       completedAt: finalReportCompleted ?? finalReportStarted,
     },
   ];
+}
+
+/**
+ * PR 011 — Carrega os `AgentStepRecord` reais da missão
+ * (em runtime Tauri) e os converte para a forma `AgentStepOutput`
+ * legada consumida pela UI. Retorna `null` quando não foi
+ * possível carregar (fallback para `buildSyntheticSteps`).
+ */
+async function loadRealAgentSteps(
+  missionId: string,
+): Promise<AgentStepOutput[] | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    const real = await invoke<AgentStepRecord[]>(
+      "agent_steps_list_by_mission",
+      { missionId },
+    );
+    if (!Array.isArray(real) || real.length === 0) {
+      return null;
+    }
+    return real.map(toLegacyAgentStepOutput);
+  } catch (error) {
+    console.warn(
+      "[desktopBridge] agent_steps_list_by_mission falhou, usando fallback sintético",
+      error,
+    );
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,6 +1250,95 @@ async function getFileDiffPatchesTauri(
     );
   } catch (error) {
     console.warn("[desktopBridge] patches_get_file_diff falhou", error);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agents (PR 011)
+// ---------------------------------------------------------------------------
+//
+// Helpers de baixo nível para os comandos `agents_*` e
+// `agent_steps_*` do Agent Engine. Em runtime Tauri, delegam
+// para o backend Rust real; fora, devolvem [] / null (o mock
+// legado é responsabilidade do `mock-api.ts`).
+//
+// `desktopBridge` adiciona:
+// - `agents.listConfigs()` / `getConfig()` / `createConfig()` /
+//   `updateConfig()` / `resetDefaults()` (canônico novo).
+// - `agentSteps.listByMission()` / `get()` (canônico novo).
+// - `models.updateAgentConfigModel(agentId, { providerId, model })`
+//   (canônico novo, em paralelo com o legado
+//   `models.updateAgentModel(agentId, input)` que continua
+//   disponível para a UI atual).
+
+async function listAgentConfigsTauri(): Promise<AgentConfig[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<AgentConfig[]>("agents_list", {});
+  } catch (error) {
+    console.warn("[desktopBridge] agents_list falhou, usando []", error);
+    return [];
+  }
+}
+
+async function getAgentConfigTauri(id: string): Promise<AgentConfig | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<AgentConfig | null>("agents_get", { id });
+  } catch (error) {
+    console.warn("[desktopBridge] agents_get falhou", error);
+    return null;
+  }
+}
+
+async function createAgentConfigTauri(
+  input: CreateAgentConfigInput,
+): Promise<AgentConfig> {
+  return await invoke<AgentConfig>("agents_create", { payload: input });
+}
+
+async function updateAgentConfigTauri(
+  id: string,
+  input: UpdateAgentConfigInput,
+): Promise<AgentConfig> {
+  return await invoke<AgentConfig>("agents_update", { id, payload: input });
+}
+
+async function removeAgentConfigTauri(id: string): Promise<void> {
+  await invoke("agents_remove", { id });
+}
+
+async function resetAgentDefaultsTauri(): Promise<AgentConfig[]> {
+  return await invoke<AgentConfig[]>("agents_reset_defaults", {});
+}
+
+async function listAgentStepsByMissionTauri(
+  missionId: string,
+): Promise<AgentStepRecord[]> {
+  if (!isTauriRuntime()) return [];
+  try {
+    return await invoke<AgentStepRecord[]>(
+      "agent_steps_list_by_mission",
+      { missionId },
+    );
+  } catch (error) {
+    console.warn(
+      "[desktopBridge] agent_steps_list_by_mission falhou, usando []",
+      error,
+    );
+    return [];
+  }
+}
+
+async function getAgentStepTauri(
+  id: string,
+): Promise<AgentStepRecord | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<AgentStepRecord | null>("agent_steps_get", { id });
+  } catch (error) {
+    console.warn("[desktopBridge] agent_steps_get falhou", error);
     return null;
   }
 }
@@ -1589,9 +1742,16 @@ export function createDesktopBridge(): FluxoraAPI {
             }
             const logs = await listMissionLogs(id);
             const base = toWorkflowRun(mission);
+            // PR 011 — Tenta carregar steps reais do Agent
+            // Engine; cai no `buildSyntheticSteps` legado
+            // quando a missão não tem steps reais (missões
+            // antigas) ou quando o backend falha.
+            const realSteps = await loadRealAgentSteps(id);
+            const steps =
+              realSteps ?? buildSyntheticSteps(mission, logs);
             return {
               ...base,
-              steps: buildSyntheticSteps(mission, logs) as any,
+              steps: steps as any,
               events: logs.map((log) => toWorkflowEvent(log, id)),
             } as WorkflowRunDetail;
           } catch (error) {
@@ -1754,6 +1914,12 @@ export function createDesktopBridge(): FluxoraAPI {
       },
       async getStepOutputs(workflowRunId: string): Promise<AgentStepOutput[]> {
         if (isTauriRuntime()) {
+          // PR 011 — Prefere os `AgentStepRecord` reais do
+          // Agent Engine. Fallback para `buildSyntheticSteps`
+          // legado quando não há steps reais (missões antigas)
+          // ou quando o backend falha.
+          const real = await loadRealAgentSteps(workflowRunId);
+          if (real) return real;
           try {
             const mission = await getMissionById(workflowRunId);
             if (!mission) return [];
@@ -1767,6 +1933,9 @@ export function createDesktopBridge(): FluxoraAPI {
       },
       async listAgentOutputs(workflowRunId: string): Promise<AgentStepOutput[]> {
         if (isTauriRuntime()) {
+          // PR 011 — Mesmo pipeline de `getStepOutputs`.
+          const real = await loadRealAgentSteps(workflowRunId);
+          if (real) return real;
           try {
             const mission = await getMissionById(workflowRunId);
             if (!mission) return [];
@@ -2385,6 +2554,148 @@ export function createDesktopBridge(): FluxoraAPI {
           }
         }
         return mock.patches.getFileDiff(workflowRunId, filePath);
+      },
+    },
+    // PR 011 — Agents (canônico novo). Em runtime Tauri,
+    // delega para os comandos `agents_*` reais. Mantém os
+    // métodos legados (`list` / `create` / `update` / `remove`)
+    // delegando para o mock legado fora do runtime Tauri.
+    agents: {
+      // Métodos legados preservados para a UI atual
+      // (AgentsPage.tsx consome `agents.list/create/update/remove`).
+      list(): Promise<Agent[]> {
+        return mock.agents.list();
+      },
+      create(input) {
+        return mock.agents.create(input);
+      },
+      update(id: string, input) {
+        return mock.agents.update(id, input);
+      },
+      remove(id: string) {
+        return mock.agents.remove(id);
+      },
+      // PR 011 — Métodos canônicos novos sobre `AgentConfig`.
+      async listConfigs(): Promise<AgentConfig[]> {
+        if (isTauriRuntime()) {
+          return await listAgentConfigsTauri();
+        }
+        return [];
+      },
+      async getConfig(id: string): Promise<AgentConfig | null> {
+        if (isTauriRuntime()) {
+          return await getAgentConfigTauri(id);
+        }
+        return null;
+      },
+      async createConfig(input: CreateAgentConfigInput): Promise<AgentConfig> {
+        if (isTauriRuntime()) {
+          return await createAgentConfigTauri(input);
+        }
+        // Fallback mock — devolve um stub com os campos
+        // fornecidos. Em browser, sem persistência.
+        return {
+          id: `mock-agent-${Date.now()}`,
+          name: input.name,
+          role: input.role,
+          description: input.description,
+          providerId: input.providerId,
+          model: input.model,
+          status: input.status ?? "enabled",
+          systemPrompt: input.systemPrompt,
+          order: input.order ?? 99,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      },
+      async updateConfig(
+        id: string,
+        input: UpdateAgentConfigInput,
+      ): Promise<AgentConfig> {
+        if (isTauriRuntime()) {
+          return await updateAgentConfigTauri(id, input);
+        }
+        // Fallback mock — devolve um stub com o id + input.
+        return {
+          id,
+          name: input.name ?? "Mock Agent",
+          role: "custom",
+          description: input.description,
+          providerId: input.providerId,
+          model: input.model,
+          status: input.status ?? "enabled",
+          systemPrompt: input.systemPrompt,
+          order: input.order ?? 99,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      },
+      async resetDefaults(): Promise<AgentConfig[]> {
+        if (isTauriRuntime()) {
+          return await resetAgentDefaultsTauri();
+        }
+        return [];
+      },
+    },
+    // PR 011 — Agent Steps (canônico novo + legado).
+    // `agentSteps.list(workflowRunId)` continua sendo a forma
+    // legada (retorna `AgentStepOutput[]` derivada dos
+    // `AgentStepRecord` reais via `loadRealAgentSteps`).
+    agentSteps: {
+      async list(workflowRunId: string): Promise<AgentStepOutput[]> {
+        // Reusa o pipeline de `workflows.getStepOutputs`
+        // (que já é real em runtime Tauri via
+        // `loadRealAgentSteps` com fallback sintético).
+        return this.listByMission(workflowRunId).then((records) =>
+          records.map(toLegacyAgentStepOutput),
+        );
+      },
+      async listByMission(missionId: string): Promise<AgentStepRecord[]> {
+        if (isTauriRuntime()) {
+          return await listAgentStepsByMissionTauri(missionId);
+        }
+        return [];
+      },
+      async get(stepId: string): Promise<AgentStepRecord | null> {
+        if (isTauriRuntime()) {
+          return await getAgentStepTauri(stepId);
+        }
+        return null;
+      },
+    },
+    // PR 011 — Models. Adiciona `updateAgentConfigModel`
+    // (canônico novo) que atualiza o `AgentConfig.providerId` /
+    // `model` no backend real. Preserva o legado
+    // `updateAgentModel(agentId, input)` para a UI atual.
+    models: {
+      updateAgentModel(agentId: string, input) {
+        return mock.models.updateAgentModel(agentId, input);
+      },
+      async updateAgentConfigModel(
+        agentId: string,
+        input: { providerId?: string | null; model?: string | null },
+      ): Promise<AgentConfig> {
+        if (isTauriRuntime()) {
+          return await updateAgentConfigTauri(agentId, {
+            providerId:
+              input.providerId === null
+                ? ""
+                : input.providerId ?? undefined,
+            model: input.model === null ? "" : input.model ?? undefined,
+          });
+        }
+        // Fallback mock — devolve um stub.
+        return {
+          id: agentId,
+          name: "Mock Agent",
+          role: "custom",
+          providerId: input.providerId ?? undefined,
+          model: input.model ?? undefined,
+          status: "enabled",
+          order: 99,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
       },
     },
   };

@@ -1042,6 +1042,116 @@ export interface AgentStepOutput {
   completedAt?: string;
 }
 
+// ============================================================================
+// PR 011 — Agent Engine próprio (Planner / Developer / QA / Finalizer)
+// ============================================================================
+//
+// Esta PR introduz uma camada real de agentes no backend Tauri/Rust.
+// Substitui os `AgentStepOutput` sintéticos (derivados dos logs pelo
+// `buildSyntheticSteps` da PR 008) por steps reais persistidos em
+// `<app_data_dir>/fluxora/agent_steps.json`.
+//
+// Os tipos legados (`Agent` / `MultiAgentRole` / `AgentStepOutput` /
+// `AgentStepStatus` / `agentSteps.list`) continuam existindo para
+// preservar a UI atual — o `desktopBridge` faz a ponte entre a nova
+// superfície canônica e a forma legada consumida pelo
+// `AgentStepOutputPanel`, `ExecutionDetailPage` e `useUsageStats`.
+
+/** Papéis canônicos de agente no Agent Engine da PR 011. */
+export type FluxoraAgentRole =
+  | "planner"
+  | "developer"
+  | "qa"
+  | "finalizer"
+  | "custom";
+
+/** Status (habilitado / desabilitado) de um agente configurado. */
+export type FluxoraAgentStatus = "enabled" | "disabled";
+
+/** Status do ciclo de vida de um `AgentStepRecord` (canônico novo). */
+export type FluxoraAgentStepStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+/**
+ * Configuração persistida de um agente (canônico novo, PR 011).
+ * Diferente do tipo legado `Agent` (voltado para Electron): este é
+ * mais simples, focado em definir o papel, o system prompt e o
+ * par `providerId`/`model` opcional que sobrescreve o da missão.
+ */
+export interface AgentConfig {
+  id: string;
+  name: string;
+  role: FluxoraAgentRole;
+  description?: string;
+  /** Provider opcional dedicado ao agente. Quando ausente, herda da missão. */
+  providerId?: string;
+  /** Modelo opcional dedicado ao agente. Quando ausente, herda da missão. */
+  model?: string;
+  status: FluxoraAgentStatus;
+  /** System prompt interno seguro (não editável pelo usuário nesta PR). */
+  systemPrompt?: string;
+  /** Ordem de execução no pipeline (0=primeiro). */
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Input aceito por `agents_create` (canônico novo). */
+export interface CreateAgentConfigInput {
+  name: string;
+  role: FluxoraAgentRole;
+  description?: string;
+  providerId?: string;
+  model?: string;
+  status?: FluxoraAgentStatus;
+  systemPrompt?: string;
+  order?: number;
+}
+
+/** Input aceito por `agents_update` (canônico novo). */
+export interface UpdateAgentConfigInput {
+  name?: string;
+  description?: string;
+  providerId?: string;
+  model?: string;
+  status?: FluxoraAgentStatus;
+  systemPrompt?: string;
+  order?: number;
+}
+
+/**
+ * Step real de um agente (canônico novo, PR 011). Persistido em
+ * `<app_data_dir>/fluxora/agent_steps.json`. Diferente do
+ * `AgentStepOutput` legado (voltado ao mock do Electron), este é
+ * produzido e persistido pelo backend Rust.
+ */
+export interface AgentStepRecord {
+  id: string;
+  missionId: string;
+  projectId: string;
+  agentId: string;
+  agentName: string;
+  role: FluxoraAgentRole;
+  status: FluxoraAgentStepStatus;
+  /** Resumo curto do input enviado ao agente (truncado, sem chain-of-thought). */
+  inputSummary?: string;
+  /** Resumo curto do output do agente (truncado). */
+  outputSummary?: string;
+  /** Output completo retornado pelo provider (truncado em 256 KiB). */
+  outputText?: string;
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Metadados opcionais (ex.: `proposalId` quando o Developer gera patch). */
+  metadata?: unknown;
+}
+
 export type WhisperProviderType = "manual" | "whisper_local_managed" | "openai_whisper" | "whisper_http" | "whisper_local";
 
 export interface WhisperHttpConfig {
@@ -2306,9 +2416,67 @@ export interface FluxoraAPI {
     create(input: CreateAgentInput): Promise<Agent>;
     update(id: string, input: UpdateAgentInput): Promise<Agent>;
     remove(id: string): Promise<void>;
+    /**
+     * PR 011 — Lista as configurações persistidas de agentes no
+     * backend real (Planner / Developer / QA / Finalizer).
+     * Em runtime Tauri, delega para `agents_list` no
+     * `agents.rs`; fora, devolve `[]` (não há agentes reais
+     * configurados no mock legado).
+     */
+    listConfigs(): Promise<AgentConfig[]>;
+    /**
+     * PR 011 — Retorna a configuração persistida de um agente
+     * por `id`, ou `null` se não existir.
+     */
+    getConfig(id: string): Promise<AgentConfig | null>;
+    /**
+     * PR 011 — Cria (ou substitui) a configuração de um agente.
+     */
+    createConfig(input: CreateAgentConfigInput): Promise<AgentConfig>;
+    /**
+     * PR 011 — Atualiza a configuração de um agente existente.
+     */
+    updateConfig(
+      id: string,
+      input: UpdateAgentConfigInput
+    ): Promise<AgentConfig>;
+    /**
+     * PR 011 — Recria os 4 agentes padrão (Planner / Developer /
+     * QA / Finalizer) caso ainda não existam, ou substitui os
+     * existentes se o caller quiser resetar. Devolve a lista
+     * final de agentes.
+     */
+    resetDefaults(): Promise<AgentConfig[]>;
+  };
+  agentSteps: {
+    list(workflowRunId: string): Promise<AgentStepOutput[]>;
+    /**
+     * PR 011 — Lista os `AgentStepRecord` reais persistidos de
+     * uma missão, ordenados por `order` crescente. Em runtime
+     * Tauri, delega para `agent_steps_list_by_mission` no
+     * `agents.rs`; fora, devolve `[]` (sem steps reais no mock).
+     */
+    listByMission(missionId: string): Promise<AgentStepRecord[]>;
+    /**
+     * PR 011 — Retorna um `AgentStepRecord` real persistido por
+     * `id`, ou `null` se não existir.
+     */
+    get(stepId: string): Promise<AgentStepRecord | null>;
   };
   models: {
     updateAgentModel(agentId: string, input: AgentModelSettingInput): Promise<Agent>;
+    /**
+     * PR 011 — Atualiza o `providerId` e/ou `model` de um agente
+     * configurado no Agent Engine real (passa `null` para
+     * limpar e herdar da missão). Devolve a configuração
+     * atualizada. Em runtime Tauri, delega para
+     * `agents_update_config` no `agents.rs`; fora, cai no
+     * mock legado (atualiza o `Agent` em memória).
+     */
+    updateAgentConfigModel(
+      agentId: string,
+      input: { providerId?: string | null; model?: string | null }
+    ): Promise<AgentConfig>;
   };
   // ============================================================================
   // PR 007 — Provider Engine próprio
@@ -2442,9 +2610,6 @@ export interface FluxoraAPI {
   commands: {
     list(workflowRunId?: string): Promise<CommandRun[]>;
     get(id: string): Promise<CommandRun | null>;
-  };
-  agentSteps: {
-    list(workflowRunId: string): Promise<AgentStepOutput[]>;
   };
   app: {
     getGitInfo(): Promise<{ branch: string; commit: string }>;

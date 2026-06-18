@@ -1,3 +1,4 @@
+mod agents;
 mod events;
 mod filesystem;
 mod git;
@@ -39,6 +40,7 @@ use approvals::{
     CreateApprovalPayload, ExecutionApprovalRecord, RejectApprovalPayload, CancelApprovalPayload,
 };
 use patches::{PatchFileChangeRecord, PatchProposalRecord};
+use agents::{AgentConfigRecord, AgentStepRecord};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
@@ -678,6 +680,137 @@ fn patches_get_file_diff(
     patches::patches_get_file_diff(app, workflow_run_id, file_path)
 }
 
+// ---------------------------------------------------------------------------
+// Agents (PR 011)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateAgentPayload {
+    pub name: String,
+    pub role: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub order: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAgentPayload {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub order: Option<u32>,
+}
+
+#[tauri::command]
+fn agents_ping() -> String {
+    agents::agents_ping()
+}
+
+#[tauri::command]
+fn agents_list(app: AppHandle) -> Result<Vec<AgentConfigRecord>, String> {
+    agents::agents_list(app)
+}
+
+#[tauri::command]
+fn agents_get(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<AgentConfigRecord>, String> {
+    agents::agents_get(app, id)
+}
+
+#[tauri::command]
+fn agents_create(
+    app: AppHandle,
+    payload: CreateAgentPayload,
+) -> Result<AgentConfigRecord, String> {
+    agents::agents_create(
+        app,
+        payload.name,
+        payload.role,
+        payload.description,
+        payload.provider_id,
+        payload.model,
+        payload.status,
+        payload.system_prompt,
+        payload.order,
+    )
+}
+
+#[tauri::command]
+fn agents_update(
+    app: AppHandle,
+    id: String,
+    payload: UpdateAgentPayload,
+) -> Result<AgentConfigRecord, String> {
+    agents::agents_update(
+        app,
+        id,
+        payload.name,
+        payload.description,
+        payload.provider_id,
+        payload.model,
+        payload.status,
+        payload.system_prompt,
+        payload.order,
+    )
+}
+
+#[tauri::command]
+fn agents_remove(app: AppHandle, id: String) -> Result<(), String> {
+    agents::agents_remove(app, id)
+}
+
+#[tauri::command]
+fn agents_reset_defaults(app: AppHandle) -> Result<Vec<AgentConfigRecord>, String> {
+    agents::agents_reset_defaults(app)
+}
+
+#[tauri::command]
+fn agent_steps_list(
+    app: AppHandle,
+    mission_id: String,
+) -> Result<Vec<AgentStepRecord>, String> {
+    agents::agent_steps_list(app, mission_id)
+}
+
+#[tauri::command]
+fn agent_steps_list_by_mission(
+    app: AppHandle,
+    mission_id: String,
+) -> Result<Vec<AgentStepRecord>, String> {
+    agents::agent_steps_list_by_mission(app, mission_id)
+}
+
+#[tauri::command]
+fn agent_steps_get(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<AgentStepRecord>, String> {
+    agents::agent_steps_get(app, id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -690,6 +823,7 @@ pub fn run() {
         .manage(permissions::PermissionsState::new())
         .manage(approvals::ApprovalsState::new())
         .manage(patches::PatchesState::new())
+        .manage(agents::AgentsState::new())
         .setup(|app| {
             // PR 006 — Carrega `voice.json` salvo no app data dir.
             // Falhas de I/O são logadas e descartadas; o app
@@ -717,6 +851,12 @@ pub fn run() {
             // PR 010 — Carrega `patches.json` salvo no app data
             // dir (estado vazio até a primeira proposta).
             patches::load_patches_on_startup(&handle);
+
+            // PR 011 — Carrega `agents.json` e
+            // `agent_steps.json` salvos no app data dir (estado
+            // vazio até o primeiro acesso). Cria os 4 agentes
+            // padrão sob demanda na primeira chamada.
+            agents::load_agents_on_startup(&handle);
 
             // Emite o evento `app/ready` no barramento assim que o
             // shell Tauri está pronto. Este é o primeiro evento real
@@ -811,7 +951,17 @@ pub fn run() {
             patches_apply,
             patches_reject,
             patches_get_changed_files,
-            patches_get_file_diff
+            patches_get_file_diff,
+            agents_ping,
+            agents_list,
+            agents_get,
+            agents_create,
+            agents_update,
+            agents_remove,
+            agents_reset_defaults,
+            agent_steps_list,
+            agent_steps_list_by_mission,
+            agent_steps_get
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

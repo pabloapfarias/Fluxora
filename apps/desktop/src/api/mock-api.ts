@@ -18,6 +18,8 @@ import type {
   UpdateProjectPolicyInput, PermissionCheckResult, MissionJob,
   CancelMissionJobInput,
   PatchProposal, CreatePatchProposalInput, ApplyPatchInput,
+  AgentConfig, CreateAgentConfigInput, UpdateAgentConfigInput,
+  AgentStepRecord,
 } from "@fluxora/shared";
 import { buildVoiceContext } from "@fluxora/voice-context";
 
@@ -883,6 +885,37 @@ export function createMockAPI(): FluxoraAPI {
         if (index < 0) throw new Error(`Agent ${id} not found`);
         agents.splice(index, 1);
       },
+      // PR 011 — Métodos canônicos novos sobre `AgentConfig`.
+      // Em runtime browser, devolvem stubs sem persistência.
+      listConfigs: async () => [],
+      getConfig: async (id: string) => null,
+      createConfig: async (input: CreateAgentConfigInput) => ({
+        id: `mock-agent-config-${Date.now()}`,
+        name: input.name,
+        role: input.role,
+        description: input.description,
+        providerId: input.providerId,
+        model: input.model,
+        status: input.status ?? "enabled",
+        systemPrompt: input.systemPrompt,
+        order: input.order ?? 99,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      updateConfig: async (id: string, input: UpdateAgentConfigInput) => ({
+        id,
+        name: input.name ?? "Mock Agent",
+        role: "custom" as const,
+        description: input.description,
+        providerId: input.providerId,
+        model: input.model,
+        status: input.status ?? "enabled",
+        systemPrompt: input.systemPrompt,
+        order: input.order ?? 99,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+      resetDefaults: async () => [],
     },
     models: {
       updateAgentModel: async (agentId: string, input: AgentModelSettingInput) => {
@@ -890,6 +923,23 @@ export function createMockAPI(): FluxoraAPI {
         if (a) Object.assign(a, { modelProviderId: input.modelProviderId, modelName: input.modelName, updatedAt: new Date().toISOString() });
         return a!;
       },
+      // PR 011 — Forma canônica nova para atualização de
+      // provider/model no `AgentConfig`. Em runtime browser,
+      // devolve um stub.
+      updateAgentConfigModel: async (
+        agentId: string,
+        input: { providerId?: string | null; model?: string | null },
+      ) => ({
+        id: agentId,
+        name: "Mock Agent",
+        role: "custom" as const,
+        providerId: input.providerId ?? undefined,
+        model: input.model ?? undefined,
+        status: "enabled" as const,
+        order: 99,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
     },
     // PR 007 — Provider Engine próprio (fallback mock).
     // Quando rodando fora do runtime Tauri, devolve listas vazias
@@ -1234,6 +1284,10 @@ export function createMockAPI(): FluxoraAPI {
     },
     agentSteps: {
       list: async (workflowRunId: string) => agentStepsByWorkflow.get(workflowRunId) || [],
+      // PR 011 — Métodos canônicos novos sobre `AgentStepRecord`.
+      // Em runtime browser (sem Tauri), devolvem stubs.
+      listByMission: async (_missionId: string) => [],
+      get: async (_stepId: string) => null,
     },
     app: {
       getGitInfo: async () => ({ branch: "main", commit: "abc1234" }),
