@@ -1,0 +1,92 @@
+# =============================================================
+# FluxoraV1 — Tauri + React + pnpm + Rust
+# =============================================================
+
+# ---------- dependencies ----------
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+
+# ---------- frontend build outputs ----------
+dist/
+build/
+.vite/
+.cache/
+.turbo/
+.parcel-cache/
+.next/
+out/
+
+# ---------- logs ----------
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# ---------- environment / secrets ----------
+.env
+.env.*
+.env.local
+.env.*.local
+!.env.example
+
+# ---------- OS / editor ----------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
+*~
+
+# ---------- Rust / Tauri (workspace root) ----------
+target/
+
+# ---------- Tauri (apps/desktop) ----------
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/.cargo/
+apps/desktop/src-tauri/WixTools/
+
+# ---------- Tauri bundles / installers ----------
+apps/desktop/src-tauri/target/release/bundle/
+*.AppImage
+*.deb
+*.rpm
+*.msi
+*.dmg
+*.pkg
+*.exe
+*.app
+
+# ---------- test / coverage ----------
+coverage/
+.nyc_output/
+*.lcov
+junit.xml
+
+# ---------- local app data / databases ----------
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.db
+*.db-journal
+
+# ---------- temporary / scratch ----------
+tmp/
+temp/
+.tmp/
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# ---------- tooling state (machine-local) ----------
+.commandcode/
+.aider*
+.cursor*
+.opencode/
