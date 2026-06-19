@@ -1433,9 +1433,49 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         );
     }
 
-    // 7. Final report — usa o output do Finalizer (que já
+    // 7. Valida se nenhum patch foi gerado para missões de criação/alteração
+    let prompt_lower = running.prompt.to_lowercase();
+    let has_creation_verbs = prompt_lower.contains("crie")
+        || prompt_lower.contains("criar")
+        || prompt_lower.contains("cria")
+        || prompt_lower.contains("criação")
+        || prompt_lower.contains("edite")
+        || prompt_lower.contains("editar")
+        || prompt_lower.contains("edita")
+        || prompt_lower.contains("altere")
+        || prompt_lower.contains("alterar")
+        || prompt_lower.contains("altera")
+        || prompt_lower.contains("implemente")
+        || prompt_lower.contains("implementar")
+        || prompt_lower.contains("construa")
+        || prompt_lower.contains("construir")
+        || prompt_lower.contains("adicione")
+        || prompt_lower.contains("adicionar")
+        || prompt_lower.contains("escreva")
+        || prompt_lower.contains("escrever")
+        || prompt_lower.contains("modify")
+        || prompt_lower.contains("create")
+        || prompt_lower.contains("write")
+        || prompt_lower.contains("implement")
+        || prompt_lower.contains("build");
+
+    let final_text = if agents_result.patch_proposal_id.is_none() {
+        if has_creation_verbs {
+            let err = "A missão pediu criação/alteração de arquivos, mas o Developer não retornou um bloco fluxora_patch válido. Nenhum arquivo foi criado.".to_string();
+            fail_mission(&app, &state, &running, &err, Some(&job_id));
+            return Err(err);
+        } else {
+            let mut text = agents_result.finalizer_output;
+            let warning = "\n\n⚠️ A missão foi concluída sem proposta de alteração. Nenhum arquivo foi criado.";
+            text.push_str(warning);
+            text
+        }
+    } else {
+        agents_result.finalizer_output
+    };
+
+    // 8. Final report — usa o output do Finalizer (que já
     //    incorpora o resumo do Developer/QA + a info do patch).
-    let final_text = agents_result.finalizer_output;
     let _ = update_mission(&state, &running.id, |m| {
         m.current_phase = Some("final-report".to_string());
         m.result_text = Some(final_text.clone());
@@ -1451,7 +1491,7 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         })),
     );
 
-    // 8. Marcar como completed
+    // 9. Marcar como completed
     let completed = update_mission(&state, &running.id, |m| {
         m.status = "completed".to_string();
         m.completed_at = Some(now_iso());

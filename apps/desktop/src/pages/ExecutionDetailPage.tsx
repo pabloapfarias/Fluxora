@@ -153,14 +153,14 @@ export function ExecutionDetailPage() {
       ) || null
     );
 
-    if (d.finalApprovalId) {
-      try {
-        const approvals = await window.fluxora.approvals.list();
-        const found = approvals.find((a) => a.id === d.finalApprovalId);
-        if (found) setApproval(found);
-      } catch {
-        // noop
-      }
+    try {
+      const approvals = await window.fluxora.approvals.list();
+      const found = d.finalApprovalId
+        ? approvals.find((a) => a.id === d.finalApprovalId)
+        : approvals.find((a) => a.workflowRunId === workflowId);
+      if (found) setApproval(found);
+    } catch {
+      // noop
     }
   }
 

@@ -1950,7 +1950,7 @@ export function createDesktopBridge(): FluxoraAPI {
             // 1. Localiza a aprovação vinculada à missão.
             const actionable = await listActionableApprovalsTauri();
             const linked = actionable.find(
-              (a) => a.missionId === id || payloadHasProposalId(a.payload)
+              (a) => a.missionId === id
             );
             if (linked) {
               // 2. Aprova via Tauri (o backend dispara
@@ -1980,7 +1980,7 @@ export function createDesktopBridge(): FluxoraAPI {
           try {
             const actionable = await listActionableApprovalsTauri();
             const linked = actionable.find(
-              (a) => a.missionId === id || payloadHasProposalId(a.payload)
+              (a) => a.missionId === id
             );
             if (linked) {
               const rejected = await rejectApprovalTauri(linked.id);

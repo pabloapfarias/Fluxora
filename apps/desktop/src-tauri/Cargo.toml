@@ -20,3 +20,6 @@ tauri-plugin-dialog = "2"
 time = { version = "0.3", features = ["formatting"] }
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 base64 = "0.22"
+
+[dev-dependencies]
+tauri = { version = "2.8.5", features = ["test"] }

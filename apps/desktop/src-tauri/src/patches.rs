@@ -1708,4 +1708,168 @@ mod tests {
         assert_eq!(normalized[0].is_new_file, Some(true));
         assert_eq!(normalized[0].is_deleted_file, Some(false));
     }
+
+    #[test]
+    fn parse_fluxora_patch_with_create() {
+        let text = r#"Here is the patch:
+```fluxora_patch
+{
+  "title": "Create testing",
+  "summary": "Creating a new test file",
+  "files": [
+    {
+      "path": "test_create.txt",
+      "operation": "create",
+      "afterContent": "hello world"
+    }
+  ]
+}
+```
+"#;
+        let extract = crate::missions::extract_fluxora_patch_block(text);
+        assert!(extract.files.is_some());
+        let files = extract.files.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "test_create.txt");
+        assert_eq!(files[0].operation, "create");
+        assert_eq!(files[0].after_content.as_deref(), Some("hello world"));
+    }
+
+    #[test]
+    fn validate_files_rejects_absolute_path() {
+        let files = vec![PatchFileChangeRecord {
+            path: "/absolute/path/file.txt".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("x".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        }];
+        assert!(validate_proposal_files(&files).is_err());
+    }
+
+    #[test]
+    fn validate_files_rejects_parent_traversal() {
+        let files = vec![PatchFileChangeRecord {
+            path: "../file.txt".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("x".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        }];
+        assert!(validate_proposal_files(&files).is_err());
+    }
+
+    #[test]
+    fn validate_files_rejects_forbidden_directories() {
+        let files = vec![PatchFileChangeRecord {
+            path: "node_modules/file.txt".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("x".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        }];
+        assert!(validate_proposal_files(&files).is_err());
+    }
+
+    #[test]
+    fn patch_proposal_with_create_marks_new_file() {
+        let files = vec![PatchFileChangeRecord {
+            path: "test_create.txt".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("hello world".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        }];
+        let normalized = validate_proposal_files(&files).unwrap();
+        assert_eq!(normalized[0].is_new_file, Some(true));
+        assert_eq!(normalized[0].is_deleted_file, Some(false));
+    }
+
+    #[test]
+    fn apply_one_file_creates_file_in_project() {
+        let unique_dir = std::env::current_dir().unwrap().join("target").join("test-project-apply");
+        if unique_dir.exists() {
+            let _ = std::fs::remove_dir_all(&unique_dir);
+        }
+        std::fs::create_dir_all(&unique_dir).unwrap();
+
+        let file_change = PatchFileChangeRecord {
+            path: "subdir/new_file.txt".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("created file content".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        };
+
+        let result = apply_one_file(&unique_dir, &file_change);
+        assert!(result.is_ok());
+
+        let file_path = unique_dir.join("subdir").join("new_file.txt");
+        assert!(file_path.exists());
+        let content = std::fs::read_to_string(file_path).unwrap();
+        assert_eq!(content, "created file content");
+
+        let _ = std::fs::remove_dir_all(&unique_dir);
+    }
+
+    #[test]
+    fn apply_one_file_rejects_out_of_project() {
+        let project_dir = std::env::current_dir().unwrap().join("target").join("test-project-out");
+        if project_dir.exists() {
+            let _ = std::fs::remove_dir_all(&project_dir);
+        }
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        // 1. Path traversal inside filename
+        let file_change = PatchFileChangeRecord {
+            path: "../outside.txt".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("dangerous".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        };
+        let result = apply_one_file(&project_dir, &file_change);
+        assert!(result.is_err());
+
+        // 2. Absolute path inside filename
+        let file_change_abs = PatchFileChangeRecord {
+            path: "/etc/passwd".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("dangerous".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        };
+        let result_abs = apply_one_file(&project_dir, &file_change_abs);
+        assert!(result_abs.is_err());
+
+        let _ = std::fs::remove_dir_all(&project_dir);
+    }
 }

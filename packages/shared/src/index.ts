@@ -2009,7 +2009,11 @@ export type MissionPhase =
   | "provider-call"
   | "response"
   | "final-report"
-  | "failed";
+  | "failed"
+  | "patch-detected"
+  | "patch-pending-approval"
+  | "patch-applied"
+  | "patch-failed";
 
 /** Modo de execução da missão. */
 export type MissionMode = "assistido" | "propositivo" | "piloto-automatico";

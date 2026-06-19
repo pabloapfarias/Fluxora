@@ -99,16 +99,27 @@ Responda com:\n\
 /// System prompt interno padrão do Developer (PR 011).
 pub(crate) const DEVELOPER_PROMPT: &str = "Você é o Developer do Fluxora.\n\
 Sua função é propor a solução com base no plano do Planner e no contexto do projeto.\n\
-Se for útil propor alteração de arquivos, use o bloco fluxora_patch ao final da resposta.\n\
+Quando a missão pedir criar, editar, alterar, implementar, construir tela, landing page, componente, arquivo, página ou código, você DEVE incluir obrigatoriamente um bloco fluxora_patch ao final da resposta.\n\
+Não apenas descreva, planeje ou diga \"eu criaria\". Gere os arquivos reais no bloco fluxora_patch.\n\
 Não execute comandos.\n\
 Não faça commit.\n\
-Não use caminhos absolutos.\n\
-Não altere node_modules, .git, vendor, dist, build, target.\n\
+Não use caminhos absolutos nem \"..\".\n\
+Não altere node_modules, .git, vendor, dist, build, target, .next, .cache, .turbo, out.\n\n\
+O bloco fluxora_patch deve seguir EXATAMENTE o formato JSON abaixo:\n\
+```fluxora_patch\n\
+{{\n  \"title\": \"Título curto da alteração\",\n  \"summary\": \"Descrição do que será alterado\",\n  \"files\": [\n    {{\n      \"path\": \"caminho/relativo/arquivo.html\",\n      \"operation\": \"create\",\n      \"afterContent\": \"conteúdo completo do arquivo\"\n    }}\n  ]\n}}\n\
+```\n\n\
+Regras para o bloco:\n\
+- Use apenas caminhos RELATIVOS ao projeto (sem \"..\", sem caminhos absolutos).\n\
+- operation deve ser \"create\", \"modify\" ou \"delete\".\n\
+- Para \"create\" e \"modify\", forneça o conteúdo final completo em afterContent.\n\
+- Para \"delete\", use operation: \"delete\" sem afterContent.\n\
+- Para página simples em projeto vazio, crie pelo menos index.html, styles.css e script.js.\n\n\
 Responda com:\n\
 1. Solução proposta\n\
 2. Justificativa\n\
 3. Riscos\n\
-4. Bloco fluxora_patch (opcional, ao final)";
+4. Bloco fluxora_patch (ao final)";
 
 /// System prompt interno padrão do QA (PR 011).
 pub(crate) const QA_PROMPT: &str = "Você é o QA do Fluxora.\n\
@@ -1482,10 +1493,17 @@ Sua tarefa: criar um plano de ação detalhado. Não proponha patches.",
             "Missão do usuário: {prompt}\n\n\
 Contexto do projeto '{name}':\n{ctx}\n\n\
 Plano do Planner:\n{plan}\n\n\
-Sua tarefa: propor a solução. Se for útil propor alterações concretas, \
-inclua um bloco fluxora_patch ao final da resposta com paths relativos \
-e operações válidas. Não proponha alterações em node_modules, .git, \
-vendor, dist, build, target.",
+Sua tarefa: propor a solução. Quando a missão pedir criar, editar, alterar, implementar, construir tela, landing page, componente, arquivo, página ou código, você DEVE incluir obrigatoriamente um bloco fluxora_patch ao final da resposta no seguinte formato JSON:\n\n\
+```fluxora_patch\n\
+{{\n  \"title\": \"Resumo curto\",\n  \"summary\": \"Descrição\",\n  \"files\": [\n    {{\n      \"path\": \"index.html\",\n      \"operation\": \"create\",\n      \"afterContent\": \"conteúdo completo\"\n    }}\n  ]\n}}\n\
+```\n\n\
+Regras:\n\
+- Não apenas descreva ou diga \"eu criaria\". Gere os arquivos reais no bloco.\n\
+- Use caminhos relativos ao projeto (sem \"..\", sem absolutos).\n\
+- operation deve ser \"create\", \"modify\" ou \"delete\".\n\
+- Para \"create\" ou \"modify\", envie o conteúdo final completo em afterContent.\n\
+- Para \"delete\", use operation: \"delete\" sem afterContent.\n\
+- Não toque em node_modules, .git, vendor, dist, build, target, .next, .cache, .turbo, out.",
             prompt = ctx.user_prompt,
             name = ctx.project_name,
             ctx = ctx.context_text,
