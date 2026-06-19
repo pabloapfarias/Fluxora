@@ -12,9 +12,9 @@ import {
   type Agent,
   type AgentConfig,
   type AiProviderConfig,
-  type OpenCodeCatalogResult,
 } from "@fluxora/shared";
 import { loadProviderCatalog } from "../lib/providerCatalog";
+import type { ProviderCatalogResult } from "../lib/providerCatalog";
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -27,7 +27,7 @@ export function ProjectsPage() {
   const [isSelectingDir, setIsSelectingDir] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<AiProviderConfig[]>([]);
-  const [catalog, setCatalog] = useState<OpenCodeCatalogResult | null>(null);
+  const [catalog, setCatalog] = useState<ProviderCatalogResult | null>(null);
 
   useEffect(() => {
     loadProjects();
@@ -54,8 +54,8 @@ export function ProjectsPage() {
   function projectReadiness(project: Project) {
     const role = recommendDeveloperRoleForStack(project.stack);
     const agent = agents.find((entry) => entry.role === role);
-    const direct = agent ? isAgentConfiguredForRealExecution(agent, catalog) : false;
-    const ready = agent ? isAgentReadyWithFallback(agent, catalog, globalDefault) : false;
+    const direct = agent ? isAgentConfiguredForRealExecution(agent) : false;
+    const ready = agent ? isAgentReadyWithFallback(agent, globalDefault) : false;
     return {
       role,
       label: formatAgentRoleLabel(role),

@@ -30,13 +30,11 @@ import type {
   FluxoraEventLevel,
   FluxoraEventSource,
   GitInspectionResult,
+  MissionExecutionReadiness,
   MissionJob,
   MissionLog,
   MissionRun,
   MissionStatus,
-  OpenCodeCatalogResult,
-  OpenCodeModel,
-  OpenCodeProvider,
   PatchProposal,
   PermissionAction,
   PermissionCheckResult,
@@ -55,6 +53,7 @@ import type {
   WorkflowRunStatus,
 } from "@fluxora/shared";
 import { createMockAPI } from "../api/mock-api";
+import { resolveExecutionReadiness } from "@fluxora/shared";
 
 type AppInfoPayload = {
   name: string;
@@ -89,10 +88,6 @@ const FLUXORA_EVENT_CHANNEL = "fluxora-event";
 
 function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
-
-function deprecatedOpenCodeError(method: string): Error {
-  return new Error(`OpenCode foi removido do FluxoraV1. Use Provider Engine, Mission Engine e Agent Engine. Método legado: ${method}.`);
 }
 
 /**
@@ -290,8 +285,7 @@ export async function diffProjectFile(
 // listeners do `mock-api.ts`, com a mesma forma de `FluxoraEvent`.
 //
 // Os métodos legados (`onWorkflowEvent`, `onJobUpdated`,
-// `onApprovalChange`, `onOpenCodeStdout`, `onOpenCodeStderr`,
-// `onOpenCodeJsonEvent`, `list`) permanecem via mock em ambos os
+// `onApprovalChange`, `list`) permanecem via mock em ambos os
 // modos — eles dependem do Mission Engine, que será migrado em PR
 // dedicada.
 
@@ -1153,6 +1147,58 @@ async function listMissionLogs(missionId: string): Promise<MissionLog[]> {
   }
 }
 
+/**
+ * PR 014 — Helper que consulta a readiness agregada de uma
+ * missão. Em runtime Tauri delega para `missions_get_readiness`,
+ * que é resolvido pelo mesmo `execution_resolver.rs` que
+ * `missions_run` consulta. Fora do runtime Tauri, computa
+ * localmente via `resolveExecutionReadiness` em `shared` —
+ * fallback idêntico em comportamento ao backend real.
+ */
+async function getReadinessTauri(
+  input: {
+    projectId?: string;
+    missionId?: string;
+    providerId?: string;
+    model?: string;
+  } | undefined
+): Promise<MissionExecutionReadiness> {
+  const payload = input ?? {};
+  if (!isTauriRuntime()) {
+    const [agents, providers] = await Promise.all([
+      listAgentConfigsTauri(),
+      listProviders(),
+    ]);
+    return resolveExecutionReadiness({
+      agents,
+      providers,
+      projectId: payload.projectId,
+      missionId: payload.missionId,
+      providerId: payload.providerId,
+      model: payload.model,
+    });
+  }
+  try {
+    return await invoke<MissionExecutionReadiness>("missions_get_readiness", {
+      payload,
+    });
+  } catch (error) {
+    console.warn("[desktopBridge] missions_get_readiness falhou", error);
+    const [agents, providers] = await Promise.all([
+      listAgentConfigsTauri(),
+      listProviders(),
+    ]);
+    return resolveExecutionReadiness({
+      agents,
+      providers,
+      projectId: payload.projectId,
+      missionId: payload.missionId,
+      providerId: payload.providerId,
+      model: payload.model,
+    });
+  }
+}
+
 async function runMissionInternal(input: RunMissionInput): Promise<MissionRun> {
   return await invoke<MissionRun>("missions_run", { payload: input });
 }
@@ -1385,13 +1431,10 @@ async function getAgentStepTauri(
 // runtime Tauri (modo navegador/Vite dev), cai no fallback do
 // `mock-api.ts` (que devolve lista vazia + respostas simples).
 //
-// O `desktopBridge` também sobrescreve `opencode.getCatalog` /
-// `getModelsForProvider` / `refreshCatalog` em runtime Tauri
-// para que, quando houver providers cadastrados no Provider
-// Engine, a UI passe a refletir a fonte de verdade nova
-// (Provider Engine) em vez do catálogo hardcoded do Electron
-// legado. A UI continua consumindo `window.fluxora.opencode.*`
-// exatamente como antes — não há quebra de contrato.
+// O `desktopBridge` também sobrescreve a superfície de
+// providers em runtime Tauri para que, quando houver
+// providers cadastrados no Provider Engine, a UI passe a
+// refletir a fonte de verdade nova.
 
 type BackendProviderTestPayload = {
   ok: boolean;
@@ -1638,69 +1681,6 @@ export async function chatStream(
   };
 }
 
-/**
- * Constrói um `OpenCodeCatalogResult` a partir dos providers
- * reais do Provider Engine. Usado pelo `desktopBridge` para
- * sobrescrever `opencode.getCatalog` em runtime Tauri quando
- * há providers cadastrados.
- *
- * Estratégia:
- * - providers do `Provider Engine` viram entradas em
- *   `OpenCodeProvider.providers` com `id` no formato
- *   `provider/{id}` (mesmo padrão usado pelo OpenCode CLI).
- * - Os modelos de cada provider viram entradas em
- *   `OpenCodeModel` com `id` no formato
- *   `provider/{providerId}/{modelId}`.
- * - Se um provider não conseguir listar modelos, ele ainda
- *   aparece em `providers`, apenas sem modelos em
- *   `modelsByProvider`.
- */
-async function buildCatalogFromProviders(): Promise<OpenCodeCatalogResult> {
-  const providers = await listProviders();
-  if (providers.length === 0) {
-    return {
-      providers: [],
-      models: [],
-      modelsByProvider: {},
-      fetchedAt: new Date().toISOString(),
-    };
-  }
-  const opencodeProviders: OpenCodeProvider[] = providers
-    .filter((p) => p.enabled)
-    .map((p) => ({
-      id: p.id,
-      displayName: p.name,
-      authType: p.apiKeyEnv ? "api" : "none",
-    }));
-  const opencodeModels: OpenCodeModel[] = [];
-  const modelsByProvider: Record<string, OpenCodeModel[]> = {};
-  // Carrega modelos em paralelo.
-  const modelLists = await Promise.all(
-    providers
-      .filter((p) => p.enabled)
-      .map((p) => listProviderModels(p.id).catch(() => [] as AiModelInfo[]))
-  );
-  providers
-    .filter((p) => p.enabled)
-    .forEach((p, idx) => {
-      const list = modelLists[idx] || [];
-      const mapped: OpenCodeModel[] = list.map((m) => ({
-        id: m.id,
-        providerId: p.id,
-        modelName: m.name,
-        displayName: m.displayName,
-      }));
-      opencodeModels.push(...mapped);
-      modelsByProvider[p.id] = mapped;
-    });
-  return {
-    providers: opencodeProviders,
-    models: opencodeModels,
-    modelsByProvider,
-    fetchedAt: new Date().toISOString(),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // desktopBridge factory
 // ---------------------------------------------------------------------------
@@ -1774,6 +1754,16 @@ export function createDesktopBridge(): FluxoraAPI {
           await invoke("missions_clear", {});
         }
         return mock.missions.clear();
+      },
+      async getReadiness(
+        input?: {
+          projectId?: string;
+          missionId?: string;
+          providerId?: string;
+          model?: string;
+        }
+      ): Promise<MissionExecutionReadiness> {
+        return await getReadinessTauri(input);
       },
     },
     // PR 008 — `workflows.*` agora é adaptado para o Mission
@@ -2179,8 +2169,7 @@ export function createDesktopBridge(): FluxoraAPI {
     providers: {
       // PR 007 — Provider Engine próprio. Em runtime Tauri,
       // delega para o backend Rust. Fora, cai no mock
-      // (que devolve lista vazia — o `opencode.getCatalog`
-      // legado continua sendo a fonte no navegador).
+      // (que devolve lista vazia).
       list() {
         return listProviders();
       },
@@ -2326,9 +2315,6 @@ export function createDesktopBridge(): FluxoraAPI {
       onWorkflowEvent: mock.events.onWorkflowEvent.bind(mock.events),
       onJobUpdated: mock.events.onJobUpdated.bind(mock.events),
       onApprovalChange: mock.events.onApprovalChange.bind(mock.events),
-      onOpenCodeStdout: () => { throw deprecatedOpenCodeError("events.onOpenCodeStdout"); },
-      onOpenCodeStderr: () => { throw deprecatedOpenCodeError("events.onOpenCodeStderr"); },
-      onOpenCodeJsonEvent: () => { throw deprecatedOpenCodeError("events.onOpenCodeJsonEvent"); },
       // PR 005 — Métodos do barramento real do FluxoraV1. Em
       // runtime Tauri, escutam o canal `fluxora-event` emitido
       // pelo backend Rust. Fora do runtime Tauri, caem no ring
@@ -2356,29 +2342,6 @@ export function createDesktopBridge(): FluxoraAPI {
       },
       async clearRecent() {
         return clearRecentFluxoraEvents(mock);
-      },
-    },
-    opencode: {
-      detect: async () => { throw deprecatedOpenCodeError("opencode.detect"); },
-      getSettings: async () => { throw deprecatedOpenCodeError("opencode.getSettings"); },
-      updateSettings: async () => { throw deprecatedOpenCodeError("opencode.updateSettings"); },
-      getStatus: async () => { throw deprecatedOpenCodeError("opencode.getStatus"); },
-      diagnostics: {
-        run: async () => { throw deprecatedOpenCodeError("opencode.diagnostics.run"); },
-        copyLastResult: async () => { throw deprecatedOpenCodeError("opencode.diagnostics.copyLastResult"); },
-      },
-      controlledExecution: {
-        run: async () => { throw deprecatedOpenCodeError("opencode.controlledExecution.run"); },
-        getResult: async () => { throw deprecatedOpenCodeError("opencode.controlledExecution.getResult"); },
-      },
-      async getCatalog(): Promise<OpenCodeCatalogResult> {
-        throw deprecatedOpenCodeError("opencode.getCatalog");
-      },
-      async getModelsForProvider(_providerId: string): Promise<OpenCodeModel[]> {
-        throw deprecatedOpenCodeError("opencode.getModelsForProvider");
-      },
-      async refreshCatalog(): Promise<OpenCodeCatalogResult> {
-        throw deprecatedOpenCodeError("opencode.refreshCatalog");
       },
     },
     voice: {

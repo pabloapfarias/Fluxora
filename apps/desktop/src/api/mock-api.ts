@@ -3,13 +3,11 @@ import type {
   WorkflowEvent, Approval, ApprovalImpact, CreateProjectInput,
   UpdateProjectInput, UpdateAgentInput,
   AgentModelSettingInput, CreateWorkflowInput, FluxoraAPI,
-  OpenCodeSettings, OpenCodeDetection, OpenCodeStatus,
-  OpenCodeProvider, OpenCodeModel, OpenCodeCatalogResult,
   AudioProviderSettings, AudioTranscriptionInput, AudioTranscriptionResult,
   CommandRun, ChangedFile, FileDiff, GitInspectionResult, VoiceRequestRecord,
   WorkflowExecutionMode, RealWorkflowStrategy, AgentStepOutput, AgentStepStatus,
   WorkflowRerunInput,
-  BackgroundWorkflowJob, OpenCodeDiagnosticResult, AudioRetentionSettings, AudioStorageStats,
+  BackgroundWorkflowJob, AudioRetentionSettings, AudioStorageStats,
   WhisperDownloadProgress, WhisperModelInfo,
   FluxoraEvent, FluxoraEventLevel, FluxoraEventSource,
   AiProviderConfig, AiModelInfo, ChatOnceRequest, ChatOnceResult,
@@ -20,7 +18,7 @@ import type {
   CancelMissionJobInput,
   PatchProposal, CreatePatchProposalInput, ApplyPatchInput,
   AgentConfig, CreateAgentConfigInput, UpdateAgentConfigInput,
-  AgentStepRecord,
+  AgentStepRecord, MissionExecutionReadiness,
 } from "@fluxora/shared";
 import { buildVoiceContext } from "@fluxora/voice-context";
 
@@ -35,45 +33,16 @@ const mockProjects: Project[] = [
 ];
 
 const mockAgents: Agent[] = [
-  { id: "agent-orchestrator", name: "Orquestrador", role: "orchestrator", description: "Coordena e gerencia todos os outros agentes", canEditFiles: false, canRunCommands: false, requiresApproval: true, enabled: true, modelProviderId: "openai", modelName: "openai/gpt-5.5", createdAt: now, updatedAt: now },
-  { id: "agent-planner", name: "Planner", role: "planner", description: "Analisa requisitos e cria planos de implementação", canEditFiles: false, canRunCommands: false, requiresApproval: false, enabled: true, modelProviderId: "opencode-go", modelName: "opencode-go/glm-5.1", createdAt: now, updatedAt: now },
-  { id: "agent-backend", name: "Backend Dev", role: "backend-dev", description: "Desenvolve APIs, serviços e lógica de servidor", canEditFiles: true, canRunCommands: true, requiresApproval: true, enabled: true, modelProviderId: "opencode-go", modelName: "opencode-go/glm-5.1", createdAt: now, updatedAt: now },
-  { id: "agent-frontend", name: "Frontend Dev", role: "frontend-dev", description: "Desenvolve interfaces web e componentes visuais", canEditFiles: true, canRunCommands: true, requiresApproval: true, enabled: true, modelProviderId: "opencode-go", modelName: "opencode-go/mimo-v2.5", createdAt: now, updatedAt: now },
-  { id: "agent-mobile", name: "Mobile Dev", role: "mobile-dev", description: "Desenvolve aplicativos móveis nativos e híbridos", canEditFiles: true, canRunCommands: true, requiresApproval: true, enabled: true, modelProviderId: "google", modelName: "google/gemini-2.5-pro", createdAt: now, updatedAt: now },
+  // PR 014 — Mantemos apenas os 4 agentes reais do Agent Engine
+  // no fallback mock (`AgentsPage` ainda pode ler o legado via
+  // `agents.list()` em ambientes sem Tauri). Agentes antigos
+  // (`Orquestrador` / `Backend Dev` / `Frontend Dev` /
+  // `Mobile Dev` / `DevOps`) ficaram fora do pipeline ativo;
+  // ficam disponíveis só como histórico.
+  { id: "agent-planner", name: "Planner", role: "planner", description: "Analisa requisitos e cria planos de implementação", canEditFiles: false, canRunCommands: false, requiresApproval: false, enabled: true, modelProviderId: "openai", modelName: "openai/gpt-5.5", createdAt: now, updatedAt: now },
+  { id: "agent-backend", name: "Developer", role: "backend-dev", description: "Pipeline real do Agent Engine usa Developer (4 agentes).", canEditFiles: true, canRunCommands: true, requiresApproval: true, enabled: true, modelProviderId: "openai", modelName: "openai/gpt-5.5", createdAt: now, updatedAt: now },
   { id: "agent-qa", name: "QA", role: "qa", description: "Executa testes e valida a qualidade do código", canEditFiles: false, canRunCommands: true, requiresApproval: false, enabled: true, modelProviderId: "openai", modelName: "openai/gpt-5.4", createdAt: now, updatedAt: now },
-  { id: "agent-devops", name: "DevOps", role: "devops", description: "Gerencia infraestrutura, CI/CD e deploy", canEditFiles: false, canRunCommands: true, requiresApproval: true, enabled: false, createdAt: now, updatedAt: now },
 ];
-
-// Catálogo mock — simula o que o OpenCode CLI retornaria em um ambiente
-// com providers comuns configurados. O mock existe apenas para que a UI
-// funcione em modo navegador; no Electron o catálogo vem do CLI real.
-const mockProviders: OpenCodeProvider[] = [
-  { id: "openai", displayName: "OpenAI", authType: "oauth" },
-  { id: "opencode-go", displayName: "OpenCode Go", authType: "api" },
-  { id: "google", displayName: "Google", authType: "api" },
-];
-
-const mockModels: OpenCodeModel[] = [
-  { id: "openai/gpt-5.5", providerId: "openai", modelName: "gpt-5.5" },
-  { id: "openai/gpt-5.4", providerId: "openai", modelName: "gpt-5.4" },
-  { id: "opencode-go/glm-5.1", providerId: "opencode-go", modelName: "glm-5.1" },
-  { id: "opencode-go/mimo-v2.5", providerId: "opencode-go", modelName: "mimo-v2.5" },
-  { id: "opencode-go/qwen3.7-plus", providerId: "opencode-go", modelName: "qwen3.7-plus" },
-  { id: "google/gemini-2.5-pro", providerId: "google", modelName: "gemini-2.5-pro" },
-];
-
-const mockModelsByProvider: Record<string, OpenCodeModel[]> = mockModels.reduce((acc, m) => {
-  if (!acc[m.providerId]) acc[m.providerId] = [];
-  acc[m.providerId].push(m);
-  return acc;
-}, {} as Record<string, OpenCodeModel[]>);
-
-const mockCatalog: OpenCodeCatalogResult = {
-  providers: mockProviders,
-  models: mockModels,
-  modelsByProvider: mockModelsByProvider,
-  fetchedAt: new Date().toISOString(),
-};
 
 let projects = [...mockProjects];
 let agents = [...mockAgents];
@@ -95,12 +64,6 @@ let voiceRequestCounter = 0;
 let agentStepsByWorkflow: Map<string, AgentStepOutput[]> = new Map();
 let agentStepCounter = 0;
 
-let opencodeSettings: OpenCodeSettings = {
-  binaryPath: "opencode",
-  defaultTimeoutMs: 5 * 60 * 1000,
-  enabled: true,
-};
-let opencodeStatus: OpenCodeStatus = "not_detected";
 let audioProvider: AudioProviderSettings = { type: "manual" };
 let audioRetentionSettings: AudioRetentionSettings = { saveAudio: true, retentionDays: 30 };
 let whisperModels: WhisperModelInfo[] = [
@@ -110,13 +73,9 @@ let whisperModels: WhisperModelInfo[] = [
 const whisperProgress: Record<string, WhisperDownloadProgress> = {};
 let settingsStore: Map<string, string> = new Map();
 let jobs: BackgroundWorkflowJob[] = [];
-let lastDiagnosticResult: OpenCodeDiagnosticResult | null = null;
 
 const workflowEventListeners = new Set<(event: WorkflowEvent) => void>();
 const jobListeners = new Set<(job: BackgroundWorkflowJob) => void>();
-const stdoutListeners = new Set<(payload: { workflowRunId: string; jobId?: string; chunk: string }) => void>();
-const stderrListeners = new Set<(payload: { workflowRunId: string; jobId?: string; chunk: string }) => void>();
-const jsonListeners = new Set<(payload: { workflowRunId: string; jobId?: string; event: unknown }) => void>();
 const approvalListeners = new Set<(approval: Approval) => void>();
 
 // PR 005 — Barramento de eventos do FluxoraV1 (fallback do mock).
@@ -242,7 +201,7 @@ async function simulateRealWorkflow(runId: string) {
     id: `cmd-${++commandRunCounter}`,
     workflowRunId: runId,
     projectId: run.projectId,
-    command: opencodeSettings.binaryPath,
+    command: "opencode",
     args: ["run", run.prompt, "--dir", project?.path || "/"],
     cwd: project?.path || "/",
     status: "running",
@@ -256,7 +215,7 @@ async function simulateRealWorkflow(runId: string) {
 
   // mock stdout
   const stdoutLines = isReadOnly ? [
-    "OpenCode CLI v0.4.2 (simulado)",
+    "CLI v0.4.2 (simulado)",
     `Carregando projeto: ${project?.name || "(sem projeto)"}`,
     `Modo: read-only`,
     "Analisando estrutura do projeto...",
@@ -274,7 +233,6 @@ async function simulateRealWorkflow(runId: string) {
   for (const line of stdoutLines) {
     cmd.stdout += line + "\n";
     createWorkflowEvent({ workflowRunId: runId, type: "opencode.stdout", message: line });
-    for (const listener of stdoutListeners) listener({ workflowRunId: runId, chunk: `${line}\n` });
     await new Promise((r) => setTimeout(r, 200));
   }
 
@@ -416,15 +374,14 @@ async function simulateMultiAgentWorkflow(runId: string) {
   await new Promise((r) => setTimeout(r, 500));
   workflowEvents.push({ id: `evt-${++eventIdCounter}`, workflowRunId: runId, type: "planner.completed", message: "Planner concluído", createdAt: new Date().toISOString() });
 
-  // Etapa 2: Developer
-  const hasBackend = /api|laravel|backend|server|banco|node|payment/i.test(run.prompt + (run.generatedContext || ""));
-  const hasFrontend = /site|tela|painel|react|vue|web|interface/i.test(run.prompt + (run.generatedContext || ""));
-  const hasMobile = /app|flutter|mobile|celular/i.test(run.prompt + (run.generatedContext || ""));
-  let devVariant = "backend-dev";
-  if (hasMobile && !hasBackend && !hasFrontend) devVariant = "mobile-dev";
-  else if (hasFrontend && !hasBackend) devVariant = "frontend-dev";
-  const devName = devVariant === "backend-dev" ? "Backend Dev" : devVariant === "frontend-dev" ? "Frontend Dev" : "Mobile Dev";
-  workflowEvents.push({ id: `evt-${++eventIdCounter}`, workflowRunId: runId, type: "developer.selected", message: `Developer selecionado: ${devName}`, createdAt: new Date().toISOString() });
+  // Etapa 2: Developer (PR 014 — papel fixo do Agent Engine real).
+  // A heurística antiga (backend-dev / frontend-dev / mobile-dev
+  // baseado em regex do prompt) foi removida: o pipeline sempre
+  // usa Developer, e a recomendação por stack é apenas um hint
+  // decorativo, sem trocar o papel real.
+  const devName = "Developer";
+  const devVariant = "developer";
+  workflowEvents.push({ id: `evt-${++eventIdCounter}`, workflowRunId: runId, type: "developer.selected", message: `Developer (papel fixo do Agent Engine)`, createdAt: new Date().toISOString() });
   workflowEvents.push({ id: `evt-${++eventIdCounter}`, workflowRunId: runId, type: "developer.started", message: `${devName} iniciado`, createdAt: new Date().toISOString() });
   const devStep: AgentStepOutput = {
     id: `step-${++agentStepCounter}`,
@@ -632,10 +589,6 @@ export function createMockAPI(): FluxoraAPI {
         const strategy: RealWorkflowStrategy =
           overrides?.realStrategy || original.realStrategy || (mode === "real" ? "single" : "multi_agent");
         const prompt = overrides?.prompt?.trim() || original.prompt;
-
-        if (overrides?.defaultTimeoutMs && overrides.defaultTimeoutMs > 0) {
-          opencodeSettings = { ...opencodeSettings, defaultTimeoutMs: overrides.defaultTimeoutMs };
-        }
 
         let rerunContext: Record<string, unknown> = {};
         try {
@@ -948,8 +901,7 @@ export function createMockAPI(): FluxoraAPI {
     // chamada cai aqui ou vai para o backend Rust.
     providers: {
       list: async () => {
-        // Em browser, o mock é vazio. O `opencode.getCatalog`
-        // continua sendo a fonte de verdade no navegador.
+        // Em browser, o mock é vazio.
         return [] as AiProviderConfig[];
       },
       get: async (id: string) => null,
@@ -1063,6 +1015,32 @@ export function createMockAPI(): FluxoraAPI {
       clear: async () => {
         // noop
       },
+      // PR 014 — Readiness agregada (mock). No browser
+      // (Vite dev), devolvemos uma readiness vazia dizendo
+      // que o Mission Engine real só roda em runtime Tauri.
+      // Em runtime Tauri, o `desktopBridge` substitui este
+      // método por `getReadinessTauri` que delega para
+      // `missions_get_readiness` no backend Rust.
+      getReadiness: async (input?: {
+        projectId?: string;
+        missionId?: string;
+        providerId?: string;
+        model?: string;
+      }): Promise<MissionExecutionReadiness> => {
+        return {
+          projectId: input?.projectId,
+          missionId: input?.missionId,
+          defaultProviderId: undefined,
+          defaultProviderName: undefined,
+          defaultModel: undefined,
+          agents: [],
+          ready: false,
+          issues: [
+            "Mission Engine só funciona em runtime Tauri. Inicie o app via Tauri para executar missões.",
+          ],
+          resolvedAt: new Date().toISOString(),
+        };
+      },
     },
     voice: {
       createFromTranscript: async (input: any) => buildVoiceContext(typeof input === "string" ? { transcript: input } : input),
@@ -1106,9 +1084,6 @@ export function createMockAPI(): FluxoraAPI {
       onWorkflowEvent: (callback: (event: WorkflowEvent) => void) => subscribe(workflowEventListeners, callback),
       onJobUpdated: (callback: (job: BackgroundWorkflowJob) => void) => subscribe(jobListeners, callback),
       onApprovalChange: (callback: (approval: Approval) => void) => subscribe(approvalListeners, callback),
-      onOpenCodeStdout: () => { throw new Error("OpenCode foi removido do FluxoraV1. Use events.subscribe com provider/stream-* e agent/step-* ."); },
-      onOpenCodeStderr: () => { throw new Error("OpenCode foi removido do FluxoraV1. Use events.subscribe com provider/stream-* e agent/step-* ."); },
-      onOpenCodeJsonEvent: () => { throw new Error("OpenCode foi removido do FluxoraV1. Use events.subscribe com provider/stream-* e agent/step-* ."); },
       // PR 005 — Barramento real do FluxoraV1 (fallback mock fora do
       // runtime Tauri). Mantém a mesma forma do barramento Tauri para
       // que o `desktopBridge` apenas roteie.
@@ -1150,23 +1125,6 @@ export function createMockAPI(): FluxoraAPI {
       clearRecent: async () => {
         mockRecentEvents = [];
       },
-    },
-    opencode: {
-      detect: async (): Promise<OpenCodeDetection> => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-      getSettings: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-      updateSettings: async (_input: Partial<OpenCodeSettings>) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-      getStatus: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-      diagnostics: {
-        run: async (_input: { binaryPath: string; runSmokeTest?: boolean; format?: "default" | "json"; controlledRunTest?: boolean }) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-        copyLastResult: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-      },
-      controlledExecution: {
-        run: async (_input: { workflowRunId: string }) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-        getResult: async (_jobId: string) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-      },
-      getCatalog: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-      getModelsForProvider: async (_providerId: string) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
-      refreshCatalog: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
     },
     git: {
       inspect: async (projectId: string): Promise<GitInspectionResult> => {

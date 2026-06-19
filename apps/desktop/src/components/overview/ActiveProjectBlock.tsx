@@ -12,6 +12,9 @@ import {
   Zap,
   Sparkles,
 } from "lucide-react";
+import type {
+  ProviderCatalogResult,
+} from "../../lib/providerCatalog";
 import {
   deriveProviderEngineGlobalDefault,
   formatAgentRoleLabel,
@@ -20,7 +23,6 @@ import {
   recommendDeveloperRoleForStack,
   type Agent,
   type AiProviderConfig,
-  type OpenCodeCatalogResult,
   type Project,
 } from "@fluxora/shared";
 import { ActionButton } from "../ui";
@@ -48,7 +50,7 @@ export interface ActiveProjectBlockProps {
   /** Providers reais do Provider Engine */
   providers?: AiProviderConfig[];
   /** Catálogo derivado do Provider Engine (para prontidão) */
-  catalog?: OpenCodeCatalogResult | null;
+  catalog?: ProviderCatalogResult | null;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -73,9 +75,9 @@ export function ActiveProjectBlock({
     ? (() => {
         const role = recommendDeveloperRoleForStack(project.stack);
         const agent = agents.find((entry) => entry.role === role);
-        const direct = agent ? isAgentConfiguredForRealExecution(agent, catalog) : false;
+        const direct = agent ? isAgentConfiguredForRealExecution(agent) : false;
         const fallback = deriveProviderEngineGlobalDefault(providers);
-        const ready = agent ? isAgentReadyWithFallback(agent, catalog, fallback) : false;
+        const ready = agent ? isAgentReadyWithFallback(agent, fallback) : false;
         return {
           role,
           label: formatAgentRoleLabel(role),

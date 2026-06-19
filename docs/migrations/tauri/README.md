@@ -303,6 +303,15 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   migração/legado/Electron/mock da experiência principal e
   consolida o Provider Engine próprio como fonte única de
   verdade para providers e modelos.
+- [PR 014 — Unificar agentes, providers e diagnóstico](./STATUS_MIGRATION_TAURI_PR_014_UNIFY_AGENTS_PROVIDERS_DIAGNOSTICS.md)
+  Introduz `execution_resolver.rs` (fonte única de resolução
+  de execução) + comando Tauri `missions_get_readiness` +
+  `resolveExecutionReadiness` no `shared`. Unifica AgentsPage,
+  diagnóstico da missão e `missions_run` em torno dos 4
+  agentes reais (Planner / Developer / QA / Finalizer) e do
+  Provider Engine real, removendo Backend Dev / Frontend Dev /
+  Mobile Dev / Orquestrador do pipeline ativo e rebaixando a
+  recomendação por stack a papel decorativo.
 
 ## Convenções aplicadas em todas as PRs
 

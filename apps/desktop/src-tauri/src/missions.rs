@@ -1173,12 +1173,33 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         }
     };
 
-    // 1. Resolver provider/model
+    // 1. Resolver provider/model usando a MESMA fonte de verdade
+    //    que `missions_get_readiness` e que a UI consome via
+    //    `resolveExecutionReadiness`. PR 014 unificou a fonte
+    //    única — `execution_resolver::resolve_mission_readiness`
+    //    — para que diagnóstico, AgentsPage e execução usem
+    //    exatamente o mesmo provider/modelo.
     let provider_state = app.state::<providers::ProvidersState>();
+    let readiness = crate::execution_resolver::resolve_mission_readiness(
+        &app,
+        crate::execution_resolver::ResolveReadinessInput {
+            project_id: Some(mission.project_id.clone()),
+            mission_id: Some(mission.id.clone()),
+            provider_id: mission.provider_id.clone(),
+            model: mission.model.clone(),
+        },
+    );
     let provider = match resolve_provider(&provider_state, mission.provider_id.as_deref()) {
         Some(p) => p,
         None => {
-            let err = "Nenhum provider real do Provider Engine está configurado. O catálogo legado do OpenCode não é usado pelo Mission Engine. Cadastre um provider em Providers usando baseUrl, apiKeyEnv e defaultModel.".to_string();
+            let err = readiness
+                .issues
+                .first()
+                .cloned()
+                .unwrap_or_else(|| {
+                    "Nenhum provider configurado. Cadastre um provider em Configurações > Providers."
+                        .to_string()
+                });
             emit_provider_missing_event(&app, &mission.id, Some(&mission.project_id));
             fail_mission(&app, &state, &mission, &err, Some(&job_id));
             return Err(err);
@@ -1192,17 +1213,25 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         fail_mission(&app, &state, &mission, &err, Some(&job_id));
         return Err(err);
     }
-    let model = mission
-        .model
+    let model = readiness
+        .default_model
         .clone()
+        .or_else(|| mission.model.clone())
         .or_else(|| provider.default_model.clone());
     let model = match model {
         Some(m) if !m.trim().is_empty() => m,
         _ => {
-            let err = format!(
-                "Nenhum modelo informado e o provider '{}' não tem defaultModel configurado.",
-                provider.name
-            );
+            let err = readiness
+                .issues
+                .iter()
+                .find(|issue| issue.contains("modelo padrão"))
+                .cloned()
+                .unwrap_or_else(|| {
+                    format!(
+                        "Nenhum modelo informado e o provider '{}' não tem defaultModel configurado.",
+                        provider.name
+                    )
+                });
             fail_mission(&app, &state, &mission, &err, Some(&job_id));
             return Err(err);
         }

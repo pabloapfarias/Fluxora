@@ -8,7 +8,7 @@ import {
 import { ExecutionFlowCard } from "../components/overview/ExecutionFlowCard";
 import { CommandPanel } from "../components/overview/CommandPanel";
 import { EventLog } from "../components/events/EventLog";
-import type { Approval, BackgroundWorkflowJob, Project, WorkflowEvent, WorkflowRun, OpenCodeStatus } from "@fluxora/shared";
+import type { Approval, BackgroundWorkflowJob, Project, WorkflowEvent, WorkflowRun } from "@fluxora/shared";
 import type { OpenCodeResponse } from "../hooks/useLiveExecutionEvents";
 
 // ---------------------------------------------------------------------------

@@ -43,8 +43,7 @@
 //   alteração de componente.
 //
 // **Esta PR NÃO implementa streaming, tool calling, execução de
-// comandos de shell, Git write operations, commit/push, ou
-// OpenCode como motor.** Os agentes chamam o Provider Engine da
+// comandos de shell, Git write operations, commit/push.** Os agentes chamam o Provider Engine da
 // PR 007 (mesmo helper `execute_mission_chat`) e respeitam
 // permissões/approvals da PR 009 e patch/diff controlado da PR 010.
 

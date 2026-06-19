@@ -6,7 +6,7 @@ import {
   AlertCircle,
   Radio,
 } from "lucide-react";
-import type { Agent, BackgroundWorkflowJob, OpenCodeCatalogResult } from "@fluxora/shared";
+import type { Agent, BackgroundWorkflowJob } from "@fluxora/shared";
 import { AgentsStatusPanel } from "../right-panel/AgentsStatusPanel";
 import { PendingApprovalsPanel } from "../right-panel/PendingApprovalsPanel";
 import { usePendingApprovals } from "../../hooks/usePendingApprovals";
@@ -20,6 +20,7 @@ import {
   type StatusBadgeStatus,
 } from "../ui";
 import { loadProviderCatalog } from "../../lib/providerCatalog";
+import type { ProviderCatalogResult } from "../../lib/providerCatalog";
 
 function mapRunStatus(status: string): StatusBadgeStatus {
   switch (status) {
@@ -38,7 +39,7 @@ function mapRunStatus(status: string): StatusBadgeStatus {
 
 export function RightPanel() {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [catalog, setCatalog] = useState<OpenCodeCatalogResult | null>(null);
+  const [catalog, setCatalog] = useState<ProviderCatalogResult | null>(null);
   const [jobs, setJobs] = useState<BackgroundWorkflowJob[]>([]);
   const pendingApprovals = usePendingApprovals();
   const activeRuns = useActiveRuns(3);

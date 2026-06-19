@@ -1,20 +1,24 @@
-import type {
-  AiModelInfo,
-  AiProviderConfig,
-  OpenCodeCatalogResult,
-  OpenCodeModel,
-  OpenCodeProvider,
-} from "@fluxora/shared";
+import type { AiModelInfo, AiProviderConfig } from "@fluxora/shared";
 
-function toCatalogProvider(provider: AiProviderConfig): OpenCodeProvider {
-  return {
-    id: provider.id,
-    displayName: provider.name,
-    authType: provider.apiKeyEnv ? "api" : "none",
-  };
+export interface ProviderCatalogEntry {
+  id: string;
+  providerId: string;
+  modelName: string;
+  displayName?: string;
 }
 
-function toCatalogModel(providerId: string, model: AiModelInfo): OpenCodeModel {
+export interface ProviderCatalogResult {
+  providers: { id: string; displayName: string }[];
+  models: ProviderCatalogEntry[];
+  modelsByProvider: Record<string, ProviderCatalogEntry[]>;
+  fetchedAt: string;
+}
+
+function toCatalogProvider(provider: AiProviderConfig) {
+  return { id: provider.id, displayName: provider.name };
+}
+
+function toCatalogModel(providerId: string, model: AiModelInfo): ProviderCatalogEntry {
   return {
     id: model.id || model.name,
     providerId,
@@ -26,21 +30,27 @@ function toCatalogModel(providerId: string, model: AiModelInfo): OpenCodeModel {
 export function buildProviderCatalog(
   providers: AiProviderConfig[],
   modelsByProvider: Record<string, AiModelInfo[]>
-): OpenCodeCatalogResult {
+): ProviderCatalogResult {
   const catalogProviders = providers.map(toCatalogProvider);
-  const catalogModelsByProvider: Record<string, OpenCodeModel[]> = {};
-  const catalogModels: OpenCodeModel[] = [];
+  const catalogModelsByProvider: Record<string, ProviderCatalogEntry[]> = {};
+  const catalogModels: ProviderCatalogEntry[] = [];
 
   providers.forEach((provider) => {
     const directModels = modelsByProvider[provider.id] || [];
     const withDefault = [...directModels];
 
-    if (provider.defaultModel && !withDefault.some((model) => model.id === provider.defaultModel || model.name === provider.defaultModel)) {
+    if (
+      provider.defaultModel &&
+      !withDefault.some(
+        (model) =>
+          model.id === provider.defaultModel || model.name === provider.defaultModel
+      )
+    ) {
       withDefault.push({
         id: provider.defaultModel,
         providerId: provider.id,
         name: provider.defaultModel,
-      });
+      } as AiModelInfo);
     }
 
     const mapped = withDefault.map((model) => toCatalogModel(provider.id, model));
@@ -56,7 +66,9 @@ export function buildProviderCatalog(
   };
 }
 
-export async function loadProviderCatalog(providers: AiProviderConfig[]): Promise<OpenCodeCatalogResult> {
+export async function loadProviderCatalog(
+  providers: AiProviderConfig[]
+): Promise<ProviderCatalogResult> {
   const settled = await Promise.all(
     providers.map(async (provider) => {
       try {

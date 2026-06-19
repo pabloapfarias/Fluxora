@@ -1,62 +1,71 @@
-import { useMemo, useRef } from "react";
-import { AlertTriangle, ArrowRight, Clock, ShieldAlert, Sparkles, Wrench, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  formatAgentRoleLabel,
-  getAgentReadiness,
-  getMissionAgentRequirements,
-  isAgentConfiguredForRealExecution,
-  recommendDeveloperRoleForStack,
-  recommendPlannerRoleForStack,
-  recommendQaRoleForStack,
-  type Agent,
-  type AgentRole,
-  type OpenCodeCatalogResult,
-  type ProjectRecommendationHistoryEntry,
+  AlertTriangle,
+  ArrowRight,
+  ShieldAlert,
+  Wrench,
+  X,
+} from "lucide-react";
+import type {
+  EffectiveExecutionAgent,
+  MissionExecutionReadiness,
 } from "@fluxora/shared";
 import { useModalAccessibility } from "../../hooks/useModalAccessibility";
 
 interface MissionDiagnosticModalProps {
   intent: string;
-  suggestedAgents: AgentRole[];
-  agents: Agent[];
-  catalog: OpenCodeCatalogResult | null;
-  hasEnabledProvider: boolean;
-  activeProjectStack?: string[];
-  savedRecommendation?: ProjectRecommendationSummary | null;
-  recommendationHistory?: ProjectRecommendationHistoryEntry[];
+  projectId?: string;
   onClose: () => void;
   onGoToAgents: () => void;
 }
 
-export interface ProjectRecommendationSummary {
-  developerRole: AgentRole;
-  developerAgentName?: string;
-  developerReady: boolean;
-  plannerRole?: AgentRole;
-  plannerAgentName?: string;
-  plannerReady: boolean;
-  qaRole?: AgentRole;
-  qaAgentName?: string;
-  qaReady: boolean;
-  appliedAt: string;
+const ROLE_LABELS: Record<string, string> = {
+  planner: "Planner",
+  developer: "Developer",
+  qa: "QA",
+  finalizer: "Finalizer",
+  custom: "Personalizado",
+};
+
+function describeProviderName(agent: EffectiveExecutionAgent): string {
+  if (!agent.providerId) return "sem provider";
+  return agent.providerName || agent.providerId;
+}
+
+function describeOrigin(agent: EffectiveExecutionAgent): string {
+  if (!agent.providerId && !agent.model) return "sem provider configurado";
+  if (agent.inheritsProvider && agent.inheritsModel) {
+    return "Usa o provider padrão de execução";
+  }
+  if (agent.inheritsProvider) return "Usa o provider padrão de execução";
+  return "Usa provider específico do agente";
 }
 
 export function MissionDiagnosticModal({
   intent,
-  suggestedAgents,
-  agents,
-  catalog,
-  hasEnabledProvider,
-  activeProjectStack,
-  savedRecommendation,
-  recommendationHistory,
+  projectId,
   onClose,
   onGoToAgents,
 }: MissionDiagnosticModalProps) {
-  const requirements = useMemo(
-    () => getMissionAgentRequirements(intent as any, suggestedAgents),
-    [intent, suggestedAgents]
-  );
+  const [readiness, setReadiness] = useState<MissionExecutionReadiness | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const result = await window.fluxora.missions.getReadiness({ projectId });
+        if (!cancelled) setReadiness(result);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalAccessibility(dialogRef, { onClose });
@@ -64,12 +73,26 @@ export function MissionDiagnosticModal({
   const titleId = "mission-diagnostic-modal-title";
   const descId = "mission-diagnostic-modal-desc";
 
+  const defaultAgent = useMemo<EffectiveExecutionAgent | null>(() => {
+    if (!readiness) return null;
+    return (
+      readiness.agents.find((entry) => entry.role === "developer") ||
+      readiness.agents[0] ||
+      null
+    );
+  }, [readiness]);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-6"
       role="presentation"
     >
-      <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} aria-label="Fechar modal" />
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={onClose}
+        aria-label="Fechar modal"
+      />
       <div
         ref={dialogRef}
         className="relative z-10 w-full max-w-3xl max-h-[88vh] overflow-auto rounded-2xl border border-border bg-bg-card shadow-2xl"
@@ -84,164 +107,157 @@ export function MissionDiagnosticModal({
               <ShieldAlert size={18} className="text-warning" />
             </div>
             <div>
-              <h2 id={titleId} className="text-lg font-semibold text-text-primary">Diagnóstico da missão</h2>
-              <div id={descId} className="text-[12px] text-text-muted mt-0.5">Intenção: <span className="text-text-secondary font-mono">{intent}</span></div>
+              <h2 id={titleId} className="text-lg font-semibold text-text-primary">
+                Diagnóstico da missão
+              </h2>
+              <div id={descId} className="text-[12px] text-text-muted mt-0.5">
+                Intenção: <span className="text-text-secondary font-mono">{intent}</span>
+              </div>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="no-drag w-9 h-9 rounded-lg border border-border-subtle text-text-muted hover:text-text-primary hover:border-accent/30 flex items-center justify-center" aria-label="Fechar modal de diagnóstico">
+          <button
+            type="button"
+            onClick={onClose}
+            className="no-drag w-9 h-9 rounded-lg border border-border-subtle text-text-muted hover:text-text-primary hover:border-accent/30 flex items-center justify-center"
+            aria-label="Fechar modal de diagnóstico"
+          >
             <X size={16} aria-hidden="true" />
           </button>
         </div>
 
         <div className="p-6 space-y-5">
-          {!hasEnabledProvider && (
-            <DiagnosticAlert
-              icon={<AlertTriangle size={16} className="text-warning flex-shrink-0 mt-0.5" />}
-              title="Nenhum provider ativo"
-              description="Ative pelo menos um provider em Configurações > Agentes para que a missão possa usar modelos reais."
-            />
-          )}
-
-          {requirements.length === 0 && hasEnabledProvider && (
-            <div className="rounded-lg border border-success/25 bg-success/10 px-3 py-2.5 text-[12.5px] text-success">
-              Todos os requisitos básicos estão atendidos. Opcionalmente, configure modelos específicos para melhorar a qualidade das respostas.
+          {loading && (
+            <div className="rounded-lg border border-border-subtle bg-bg-deep/30 px-3 py-2.5 text-[12.5px] text-text-muted">
+              Verificando readiness do Agent Engine e Provider Engine…
             </div>
           )}
 
-          <section className="space-y-2.5">
-            <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted font-semibold">Agentes exigidos</div>
-            <ul className="space-y-2">
-              {requirements.map((req) => {
-                const agent = agents.find((entry) => entry.role === req.role);
-                const readiness = agent
-                  ? getAgentReadiness(agent, catalog)
-                  : { ready: false, reasons: ["Nenhum agente cadastrado para este papel."] };
-                return (
-                  <li
-                    key={req.role}
-                    className={`rounded-lg border px-3 py-2.5 flex items-start gap-3 ${
-                      readiness.ready ? "border-success/20 bg-success/10" : "border-warning/25 bg-warning/10"
-                    }`}
-                  >
-                    <div className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${readiness.ready ? "bg-success/20 text-success" : "bg-warning/20 text-warning"}`}>
-                      <Wrench size={14} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 text-[13px] text-text-primary font-medium">
-                        {agent ? agent.name : formatAgentRoleLabel(req.role)}
-                        <span className="text-text-muted text-[11.5px]">•</span>
-                        <span className="text-text-muted text-[11.5px]">{formatAgentRoleLabel(req.role)}</span>
-                      </div>
-                      <div className="text-[11.5px] text-text-secondary mt-0.5">{req.reason}</div>
-                      {!readiness.ready && (
-                        <ul className="mt-2 list-disc pl-5 text-[11.5px] text-warning space-y-0.5">
-                          {readiness.reasons.map((reason) => (
-                            <li key={reason}>{reason}</li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
+          {!loading && readiness && readiness.ready && (
+            <div className="rounded-lg border border-success/25 bg-success/10 px-3 py-2.5 text-[12.5px] text-success">
+              Todos os agentes reais estão prontos. Esta é a configuração que será usada na próxima execução.
+            </div>
+          )}
 
-          {(() => {
-            const unassigned = requirements.filter((req) => !agents.find((entry) => entry.role === req.role));
-            if (unassigned.length === 0) return null;
-            return (
-              <DiagnosticAlert
-                icon={<ArrowRight size={16} className="text-accent flex-shrink-0 mt-0.5" />}
-                title="Sugestão"
-                description={`Crie agentes para os papéis faltantes: ${unassigned.map((entry) => formatAgentRoleLabel(entry.role)).join(", ")}.`}
-              />
-            );
-          })()}
+          {!loading && readiness && !readiness.ready && (
+            <DiagnosticAlert
+              icon={<AlertTriangle size={16} className="text-warning flex-shrink-0 mt-0.5" />}
+              title="Missão ainda não está pronta"
+              description={
+                readiness.issues[0] ||
+                "Verifique provider e agentes antes de executar."
+              }
+            />
+          )}
 
-          {activeProjectStack && activeProjectStack.length > 0 && (
-            <section className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted font-semibold">Recomendação por stack</div>
-                {savedRecommendation && (
-                  <span className="text-[10.5px] text-text-muted">
-                    Aplicado em {new Date(savedRecommendation.appliedAt).toLocaleString()}
-                  </span>
-                )}
+          {readiness && readiness.defaultProviderId && (
+            <section className="rounded-lg border border-border-subtle bg-bg-deep/30 px-3 py-2.5 text-[12px] text-text-secondary space-y-1">
+              <div>
+                Provider padrão de execução:{" "}
+                <span className="text-text-primary font-medium">
+                  {readiness.defaultProviderName || readiness.defaultProviderId}
+                </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                <RecommendationCard
-                  label="Developer"
-                  role={savedRecommendation?.developerRole ?? recommendDeveloperRoleForStack(activeProjectStack)}
-                  agentName={savedRecommendation?.developerAgentName ?? findAgentName(agents, savedRecommendation?.developerRole ?? recommendDeveloperRoleForStack(activeProjectStack))}
-                  ready={savedRecommendation?.developerReady ?? isAgentReady(agents, catalog, savedRecommendation?.developerRole ?? recommendDeveloperRoleForStack(activeProjectStack))}
-                />
-                {(() => {
-                  const plannerRole = savedRecommendation?.plannerRole ?? recommendPlannerRoleForStack(activeProjectStack);
-                  if (!plannerRole) return null;
-                  return (
-                    <RecommendationCard
-                      label="Planner"
-                      role={plannerRole}
-                      agentName={savedRecommendation?.plannerAgentName ?? findAgentName(agents, plannerRole)}
-                      ready={savedRecommendation?.plannerReady ?? isAgentReady(agents, catalog, plannerRole)}
-                    />
-                  );
-                })()}
-                {(() => {
-                  const qaRole = savedRecommendation?.qaRole ?? recommendQaRoleForStack(activeProjectStack);
-                  if (!qaRole) return null;
-                  return (
-                    <RecommendationCard
-                      label="QA"
-                      role={qaRole}
-                      agentName={savedRecommendation?.qaAgentName ?? findAgentName(agents, qaRole)}
-                      ready={savedRecommendation?.qaReady ?? isAgentReady(agents, catalog, qaRole)}
-                    />
-                  );
-                })()}
+              <div>
+                Modelo padrão:{" "}
+                <span className="text-text-primary font-medium">
+                  {readiness.defaultModel || "não resolvido"}
+                </span>
               </div>
             </section>
           )}
 
-          {recommendationHistory && recommendationHistory.length > 0 && (
+          <section className="space-y-2.5">
+            <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted font-semibold">
+              Agentes que serão executados
+            </div>
+            <ul className="space-y-2">
+              {readiness?.agents.map((agent) => (
+                <li
+                  key={agent.agentId}
+                  className={`rounded-lg border px-3 py-2.5 flex items-start gap-3 ${
+                    agent.ready
+                      ? "border-success/20 bg-success/10"
+                      : "border-warning/25 bg-warning/10"
+                  }`}
+                >
+                  <div
+                    className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${
+                      agent.ready
+                        ? "bg-success/20 text-success"
+                        : "bg-warning/20 text-warning"
+                    }`}
+                  >
+                    <Wrench size={14} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 text-[13px] text-text-primary font-medium">
+                      {agent.name}
+                      <span className="text-text-muted text-[11.5px]">•</span>
+                      <span className="text-text-muted text-[11.5px]">
+                        {ROLE_LABELS[agent.role] || agent.role}
+                      </span>
+                    </div>
+                    <div className="text-[11.5px] text-text-secondary mt-0.5">
+                      Provider efetivo:{" "}
+                      <span className="text-text-primary font-medium">
+                        {describeProviderName(agent)}
+                      </span>
+                    </div>
+                    <div className="text-[11.5px] text-text-secondary">
+                      Modelo efetivo:{" "}
+                      <span className="text-text-primary font-medium">
+                        {agent.model || "não resolvido"}
+                      </span>
+                    </div>
+                    <div className="text-[11.5px] text-text-muted mt-0.5">
+                      {describeOrigin(agent)}
+                    </div>
+                    {!agent.ready && agent.issues.length > 0 && (
+                      <ul className="mt-2 list-disc pl-5 text-[11.5px] text-warning space-y-0.5">
+                        {agent.issues.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <span
+                    className={`text-[10.5px] font-semibold uppercase tracking-wide ${
+                      agent.ready ? "text-success" : "text-warning"
+                    }`}
+                  >
+                    {agent.ready ? "Pronto" : "Pendente"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {readiness && readiness.issues.length > 0 && (
             <section className="space-y-2.5">
-              <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-text-muted font-semibold">
-                <Clock size={11} className="text-accent" />
-                Histórico de recomendações deste projeto
+              <div className="text-[10px] uppercase tracking-[0.12em] text-text-muted font-semibold">
+                Pendências globais
               </div>
-              <ol className="space-y-1.5">
-                {recommendationHistory.slice(0, 5).map((entry, index) => {
-                  const isLatest = index === 0;
-                  const dev = formatAgentRoleLabel(entry.developerRole);
-                  const planner = entry.plannerRole ? formatAgentRoleLabel(entry.plannerRole) : undefined;
-                  const qa = entry.qaRole ? formatAgentRoleLabel(entry.qaRole) : undefined;
-                  const summary = [dev, planner, qa].filter(Boolean).join(" · ");
-                  return (
-                    <li
-                      key={entry.id}
-                      className={`rounded-lg border px-3 py-2 flex items-center justify-between gap-3 ${
-                        isLatest
-                          ? "border-accent/30 bg-accent/10"
-                          : "border-border-subtle bg-bg-deep/30"
-                      }`}
-                    >
-                      <div className="min-w-0">
-                        <div className="text-[12px] text-text-primary truncate">{summary}</div>
-                        <div className="text-[10.5px] text-text-muted">
-                          {new Date(entry.appliedAt).toLocaleString()} · fonte: {entry.source}
-                        </div>
-                      </div>
-                      {isLatest && (
-                        <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-accent/20 text-accent border border-accent/30 font-semibold uppercase tracking-wide">
-                          atual
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ol>
+              <ul className="space-y-1.5">
+                {readiness.issues.map((issue, index) => (
+                  <li
+                    key={`${index}-${issue}`}
+                    className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[12px] text-warning"
+                  >
+                    {issue}
+                  </li>
+                ))}
+              </ul>
             </section>
+          )}
+
+          {defaultAgent && (
+            <DiagnosticAlert
+              icon={<ArrowRight size={16} className="text-accent flex-shrink-0 mt-0.5" />}
+              title="Recomendação de especialização"
+              description={
+                "A pilha do projeto pode sugerir foco (ex.: APIs, UI, mobile), mas a execução continua usando Developer / QA / Planner / Finalizer."
+              }
+            />
           )}
         </div>
 
@@ -266,45 +282,21 @@ export function MissionDiagnosticModal({
   );
 }
 
-function DiagnosticAlert({ icon, title, description }: { icon: React.ReactNode; title: string; description: string }) {
+function DiagnosticAlert({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}) {
   return (
     <div className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5 text-[12.5px] flex items-start gap-2.5">
       {icon}
       <div>
         <div className="font-medium text-text-primary">{title}</div>
         <div className="text-text-secondary text-[12px] mt-0.5">{description}</div>
-      </div>
-    </div>
-  );
-}
-
-function findAgentName(agents: Agent[], role: AgentRole | undefined): string | undefined {
-  if (!role) return undefined;
-  return agents.find((entry) => entry.role === role)?.name;
-}
-
-function isAgentReady(agents: Agent[], catalog: OpenCodeCatalogResult | null, role: AgentRole | undefined): boolean {
-  if (!role) return false;
-  const agent = agents.find((entry) => entry.role === role);
-  if (!agent) return false;
-  return isAgentConfiguredForRealExecution(agent, catalog);
-}
-
-function RecommendationCard({ label, role, agentName, ready }: { label: string; role: AgentRole; agentName?: string; ready: boolean }) {
-  return (
-    <div className="rounded-lg border border-border-subtle bg-bg-deep/40 px-3 py-2.5">
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-text-muted font-semibold">
-        <Sparkles size={11} className="text-accent" />
-        {label}
-      </div>
-      <div className="text-[12.5px] text-text-primary mt-1 font-medium">
-        {formatAgentRoleLabel(role)}
-      </div>
-      <div className="text-[11.5px] text-text-muted mt-0.5">
-        {agentName || "Sem agente cadastrado"}
-      </div>
-      <div className={`mt-1 text-[10.5px] font-semibold ${ready ? "text-success" : "text-warning"}`}>
-        {ready ? "Pronto" : "Pendente"}
       </div>
     </div>
   );

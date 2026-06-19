@@ -1,5 +1,6 @@
 mod agents;
 mod events;
+mod execution_resolver;
 mod filesystem;
 mod git;
 mod missions;
@@ -41,6 +42,7 @@ use approvals::{
 };
 use patches::{PatchFileChangeRecord, PatchProposalRecord};
 use agents::{AgentConfigRecord, AgentStepRecord};
+use execution_resolver::{MissionExecutionReadiness, ResolveReadinessInput};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
@@ -432,6 +434,40 @@ fn missions_create_and_run(
     payload: CreateMissionPayload,
 ) -> Result<MissionRecord, String> {
     missions::missions_create_and_run(app, payload)
+}
+
+#[derive(Default, Deserialize)]
+struct MissionReadinessPayload {
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    mission_id: Option<String>,
+    #[serde(default)]
+    provider_id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// PR 014 — Resolve a readiness de uma missão usando SOMENTE os
+/// dados reais do Agent Engine + Provider Engine. É a mesma
+/// função que o `missions_run` consulta internamente antes de
+/// iniciar o pipeline. A UI consome este comando para mostrar o
+/// diagnóstico da missão, a AgentsPage e o banner global sempre
+/// alinhados com o que será executado.
+#[tauri::command]
+fn missions_get_readiness(
+    app: AppHandle,
+    payload: MissionReadinessPayload,
+) -> MissionExecutionReadiness {
+    execution_resolver::resolve_mission_readiness(
+        &app,
+        ResolveReadinessInput {
+            project_id: payload.project_id,
+            mission_id: payload.mission_id,
+            provider_id: payload.provider_id,
+            model: payload.model,
+        },
+    )
 }
 
 #[tauri::command]
@@ -938,6 +974,7 @@ pub fn run() {
             missions_create_and_run,
             missions_list_logs,
             missions_clear,
+            missions_get_readiness,
             permissions_ping,
             permissions_get_project_policy,
             permissions_update_project_policy,

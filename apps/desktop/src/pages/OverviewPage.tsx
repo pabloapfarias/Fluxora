@@ -22,20 +22,12 @@ import type {
   Approval,
   WorkflowExecutionMode,
   RealWorkflowStrategy,
-  OpenCodeCatalogResult,
 } from "@fluxora/shared";
 import {
-   appendProjectRecommendationHistory,
-   buildMissionPrecheck,
    classifyMissionIntent,
    deriveProviderEngineGlobalDefault,
-   getMissionAgentRequirements,
-   getRequiredAgentRolesForMission,
    isAgentConfiguredForRealExecution,
    isAgentReadyWithFallback,
-   readProjectRecommendationHistory,
-   readProjectRecommendations,
-   recordProjectRecommendation,
    recommendDeveloperRoleForStack,
    recommendPlannerRoleForStack,
    recommendProjectStackLabel,
@@ -44,13 +36,11 @@ import {
    validateApprovalContext,
    formatAgentRoleLabel,
    type AgentRole,
-   type ProjectRecommendation,
-   type ProjectRecommendationHistoryEntry,
  } from "@fluxora/shared";
 import { useActiveProject } from "../contexts/ActiveProjectContext";
 import { ExecutionFlowCard } from "../components/overview/ExecutionFlowCard";
 import { CommandPanel } from "../components/overview/CommandPanel";
-import { MissionDiagnosticModal, type ProjectRecommendationSummary } from "../components/overview/MissionDiagnosticModal";
+import { MissionDiagnosticModal } from "../components/overview/MissionDiagnosticModal";
 import { RecentExecutions } from "../components/overview/RecentExecutions";
 import { EventLog } from "../components/events/EventLog";
 import { ActiveProjectBlock } from "../components/overview/ActiveProjectBlock";
@@ -61,6 +51,7 @@ import { useLiveExecutionEvents } from "../hooks/useLiveExecutionEvents";
 import type { OpenCodeResponse } from "../hooks/useLiveExecutionEvents";
 import { classifyCommandIntent } from "../lib/presentationLabels";
 import { loadProviderCatalog } from "../lib/providerCatalog";
+import type { ProviderCatalogResult } from "../lib/providerCatalog";
 
 type OverviewExecutionMode = "simulated" | "real" | "multi_agent";
 
@@ -76,7 +67,7 @@ export function OverviewPage() {
   const [allApprovals, setAllApprovals] = useState<Approval[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<AiProviderConfig[]>([]);
-  const [catalog, setCatalog] = useState<OpenCodeCatalogResult | null>(null);
+  const [catalog, setCatalog] = useState<ProviderCatalogResult | null>(null);
   const [pendingFinalApproval, setPendingFinalApproval] = useState<Approval | null>(null);
   const [executionMode, setExecutionMode] = useState<OverviewExecutionMode>(() => {
     try {
@@ -105,7 +96,7 @@ export function OverviewPage() {
       return false;
     }
   });
-  const [diagnosticContext, setDiagnosticContext] = useState<{ intent: string; suggestedAgents: Agent["role"][] } | null>(null);
+  const [diagnosticContext, setDiagnosticContext] = useState<{ intent: string } | null>(null);
   const [commandText, setCommandText] = useState("");
   const loadGenerationRef = useRef(0);
   const selectedRunIdRef = useRef<string | null>(null);
@@ -299,7 +290,7 @@ export function OverviewPage() {
   const realExecutionBlocker = useMemo(() => {
     const hasEnabledProvider = providers.some((provider) => provider.enabled);
     const hasGlobalFallback = Boolean(globalDefault.providerId && globalDefault.modelName);
-    const isAnyAgentReady = agents.some((agent) => isAgentReadyWithFallback(agent, catalog, globalDefault));
+    const isAnyAgentReady = agents.some((agent) => isAgentReadyWithFallback(agent, globalDefault));
 
     if (executionMode === "real") {
       if (!hasEnabledProvider && !hasGlobalFallback) {
@@ -327,13 +318,13 @@ export function OverviewPage() {
     const mandatoryRoles = ["planner", "qa"] as const;
     const missingMandatory = mandatoryRoles.filter((role) => {
       const agent = agents.find((entry) => entry.role === role);
-      return !agent || !isAgentReadyWithFallback(agent, catalog, globalDefault);
+      return !agent || !isAgentReadyWithFallback(agent, globalDefault);
     });
 
     const developerRoles = ["backend-dev", "frontend-dev", "mobile-dev"] as const;
     const hasDeveloperReady = developerRoles.some((role) => {
       const agent = agents.find((entry) => entry.role === role);
-      return Boolean(agent && isAgentReadyWithFallback(agent, catalog, globalDefault));
+      return Boolean(agent && isAgentReadyWithFallback(agent, globalDefault));
     });
 
     const missing: string[] = [...missingMandatory];
@@ -350,10 +341,10 @@ export function OverviewPage() {
     (role: AgentRole): { ready: boolean; agentName?: string; usingFallback: boolean } => {
       const agent = agents.find((entry) => entry.role === role);
       if (!agent) return { ready: false, usingFallback: false };
-      if (isAgentConfiguredForRealExecution(agent, catalog)) {
+      if (isAgentConfiguredForRealExecution(agent)) {
         return { ready: true, agentName: agent.name, usingFallback: false };
       }
-      if (isAgentReadyWithFallback(agent, catalog, globalDefault)) {
+      if (isAgentReadyWithFallback(agent, globalDefault)) {
         return { ready: true, agentName: agent.name, usingFallback: true };
       }
       return { ready: false, agentName: agent.name, usingFallback: false };
@@ -383,23 +374,6 @@ export function OverviewPage() {
         : null,
     };
   }, [activeProject, isAgentReady]);
-
-  const getMissingAgentConfigMessage = useCallback((intent: string, suggestedAgents: Agent["role"][]) => {
-    const requirements = getMissionAgentRequirements(intent as any, suggestedAgents);
-    const missingLines: string[] = [];
-    for (const req of requirements) {
-      const agent = agents.find((entry) => entry.role === req.role);
-      if (!agent) {
-        missingLines.push(`${formatAgentRoleLabel(req.role)} (papel sem agente cadastrado) — ${req.reason}`);
-        continue;
-      }
-      if (!isAgentReadyWithFallback(agent, catalog, globalDefault)) {
-        missingLines.push(`${formatAgentRoleLabel(req.role)} (${agent.name}) — agente sem provider/modelo ativo`);
-      }
-    }
-    if (missingLines.length === 0) return undefined;
-    return `Agentes obrigatórios não estão prontos para esta missão:\n• ${missingLines.join("\n• ")}\nConfigure provider e modelo na tela de Agentes, ou defina um modelo padrão global em Configurações.`;
-  }, [agents, catalog, globalDefault]);
 
   async function handleCancelActiveJob() {
     if (!activeJob) return;
@@ -470,9 +444,8 @@ export function OverviewPage() {
 
   const handleRequestDiagnostics = useCallback(() => {
     const intent = classifyMissionIntent(commandText);
-    const suggestedAgents = agents.map((agent) => agent.role);
-    setDiagnosticContext({ intent, suggestedAgents });
-  }, [commandText, agents]);
+    setDiagnosticContext({ intent });
+  }, [commandText]);
 
   const closeDiagnostics = useCallback(() => setDiagnosticContext(null), []);
 
@@ -480,34 +453,6 @@ export function OverviewPage() {
     setDiagnosticContext(null);
     navigate("/agents");
   }, [navigate]);
-
-  const savedRecommendation = useMemo<ProjectRecommendationSummary | null>(() => {
-    if (!activeProject) return null;
-    const map = readProjectRecommendations(window.localStorage);
-    const entry = map[activeProject.id];
-    if (!entry) return null;
-    const findAgent = (role?: string) => (role ? agents.find((agent) => agent.role === role) : undefined);
-    const devAgent = findAgent(entry.developerRole);
-    const plannerAgent = entry.plannerRole ? findAgent(entry.plannerRole) : undefined;
-    const qaAgent = entry.qaRole ? findAgent(entry.qaRole) : undefined;
-    return {
-      developerRole: entry.developerRole as AgentRole,
-      developerAgentName: devAgent?.name,
-      developerReady: devAgent ? isAgentReadyWithFallback(devAgent, catalog, globalDefault) : false,
-      plannerRole: entry.plannerRole as AgentRole | undefined,
-      plannerAgentName: plannerAgent?.name,
-      plannerReady: plannerAgent ? isAgentReadyWithFallback(plannerAgent, catalog, globalDefault) : false,
-      qaRole: entry.qaRole as AgentRole | undefined,
-      qaAgentName: qaAgent?.name,
-      qaReady: qaAgent ? isAgentReadyWithFallback(qaAgent, catalog, globalDefault) : false,
-      appliedAt: entry.appliedAt,
-    };
-  }, [activeProject, agents, catalog, globalDefault]);
-
-  const recommendationHistory = useMemo<ProjectRecommendationHistoryEntry[]>(() => {
-    if (!activeProject) return [];
-    return readProjectRecommendationHistory(window.localStorage, activeProject.id);
-  }, [activeProject]);
 
   /**
    * Creates a workflow from a text command and executes it based on the selected mode.
@@ -572,7 +517,7 @@ export function OverviewPage() {
       });
 
       if (executionMode === "real") {
-        const readyAgents = agents.filter((agent) => isAgentConfiguredForRealExecution(agent, catalog));
+        const readyAgents = agents.filter((agent) => isAgentConfiguredForRealExecution(agent));
         const hasEnabledProvider = Boolean(catalog?.providers.length);
         if (!hasEnabledProvider || readyAgents.length === 0) {
           window.alert(
@@ -583,9 +528,17 @@ export function OverviewPage() {
       }
 
       if (executionMode === "multi_agent") {
-        const missingAgentMessage = getMissingAgentConfigMessage(context.intent, context.suggestedAgents);
-        if (missingAgentMessage) {
-          window.alert(missingAgentMessage);
+        // PR 014 — Readiness agregada é a única fonte de
+        // verdade para checar se a missão pode rodar.
+        const readiness = await window.fluxora.missions.getReadiness({
+          projectId: project?.id,
+          providerId: context.suggestedAgents.length > 0 ? undefined : undefined,
+        });
+        if (!readiness.ready) {
+          window.alert(
+            readiness.issues[0] ||
+              "Missão ainda não está pronta. Verifique provider e agentes em Configurações > Agentes."
+          );
           return;
         }
       }
@@ -657,50 +610,35 @@ export function OverviewPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [executionMode, activeProject, projects, canRunControlledExecution, submitting, activeRun, setEvents, clearLogsOnNewMission, clearMissionView, getMissingAgentConfigMessage, agents, catalog]);
+  }, [executionMode, activeProject, projects, canRunControlledExecution, submitting, activeRun, setEvents, clearLogsOnNewMission, clearMissionView, agents, catalog]);
 
   const handleCommandSubmit = useCallback((text: string) => {
     if (!text.trim()) return;
 
     const intent = classifyMissionIntent(text);
-    const precheck = buildMissionPrecheck({
-      text,
-      intent,
-      suggestedAgents: agents.map((agent) => agent.role),
-      activeProject: activeProject ? { stack: activeProject.stack } : undefined,
-      agents,
-      catalog,
-    });
 
-    const hasBlockingIssues =
-      (executionMode === "real" || executionMode === "multi_agent") && precheck.blockingReasons.length > 0;
-
-    if (hasBlockingIssues) {
-      setDiagnosticContext({ intent, suggestedAgents: agents.map((agent) => agent.role) });
+    // PR 014 — A readiness real (Agent Engine + Provider
+    // Engine) decide se a missão pode ser executada. Não há
+    // mais pré-checagem legada baseada em `Agent` /
+    // `buildMissionPrecheck` — o backend expõe
+    // `missions.getReadiness(...)` que retorna a mesma visão
+    // da AgentsPage.
+    if (executionMode === "real" || executionMode === "multi_agent") {
+      void (async () => {
+        const readiness = await window.fluxora.missions.getReadiness({
+          projectId: activeProject?.id,
+        });
+        if (!readiness.ready) {
+          setDiagnosticContext({ intent });
+          return;
+        }
+        executeCommand(text);
+      })();
       return;
     }
 
-    if (activeProject && developerRecommendation) {
-      const appliedAt = new Date().toISOString();
-      recordProjectRecommendation(window.localStorage, {
-        projectId: activeProject.id,
-        developerRole: developerRecommendation.role,
-        plannerRole: developerRecommendation.planner?.role,
-        qaRole: developerRecommendation.qa?.role,
-        appliedAt,
-      });
-      appendProjectRecommendationHistory(window.localStorage, activeProject.id, {
-        id: `${activeProject.id}-${appliedAt}`,
-        developerRole: developerRecommendation.role,
-        plannerRole: developerRecommendation.planner?.role,
-        qaRole: developerRecommendation.qa?.role,
-        appliedAt,
-        source: "mission",
-      });
-    }
-
     executeCommand(text);
-  }, [agents, catalog, activeProject, developerRecommendation, executionMode, executeCommand]);
+  }, [activeProject, executionMode, executeCommand]);
 
   // Compute result text for drawer
   const missionResultEvents = events.filter(
@@ -872,13 +810,7 @@ export function OverviewPage() {
       {diagnosticContext && (
         <MissionDiagnosticModal
           intent={diagnosticContext.intent}
-          suggestedAgents={diagnosticContext.suggestedAgents}
-          agents={agents}
-          catalog={catalog}
-          hasEnabledProvider={providers.some((provider) => provider.enabled) || Boolean(globalDefault.providerId && globalDefault.modelName)}
-          activeProjectStack={activeProject?.stack}
-          savedRecommendation={savedRecommendation}
-          recommendationHistory={recommendationHistory}
+          projectId={activeProject?.id}
           onClose={closeDiagnostics}
           onGoToAgents={goToAgentsFromDiagnostics}
         />

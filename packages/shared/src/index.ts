@@ -37,6 +37,17 @@ export interface UpdateProjectInput {
 }
 
 // Agent types
+/**
+ * @deprecated Tipos legados da fase Electron. A PR 014
+ * consolidou o Agent Engine real em `FluxoraAgentRole`
+ * (`planner` | `developer` | `qa` | `finalizer` | `custom`).
+ * O tipo `AgentRole` continua existindo por compatibilidade
+ * com mocks e adaptadores legados, mas a UI ativa do FluxoraV1
+ * não deve mais usar `backend-dev` / `frontend-dev` /
+ * `mobile-dev` / `orchestrator` como agentes exigidos pela
+ * missão. A readiness real (`MissionExecutionReadiness`) é a
+ * única fonte de verdade.
+ */
 export type BuiltInAgentRole =
   | "orchestrator"
   | "planner"
@@ -49,6 +60,10 @@ export type BuiltInAgentRole =
 /**
  * Custom roles keep the prefix "custom:" to avoid collision
  * with built-in agent roles.
+ *
+ * @deprecated Legado — prefira `FluxoraAgentRole = "custom"`
+ * (canônico novo do Agent Engine da PR 011) ao criar agentes
+ * persistidos.
  */
 export type CustomAgentRole = `custom:${string}`;
 
@@ -131,43 +146,6 @@ export interface UpdateAgentInput {
   enabled?: boolean;
 }
 
-// === Legacy OpenCode catalog types ===
-// Mantidos por compatibilidade. No runtime Tauri atual, a fonte de verdade
-// para execução real é o Provider Engine próprio (`providers.*`).
-
-/** Provider retornado por `opencode providers list`. */
-export interface OpenCodeProvider {
-  /** Identificador único no OpenCode (ex.: "opencode-go", "openai", "alibaba-cn"). */
-  id: string;
-  /** Nome legível retornado pelo CLI (ex.: "OpenCode Go", "OpenAI"). */
-  displayName: string;
-  /** Tipo de autenticação ("oauth", "api", etc.). */
-  authType: string;
-}
-
-/** Modelo retornado por `opencode models` ou `opencode models <provider>`. */
-export interface OpenCodeModel {
-  /** Identificador completo no formato provider/model (ex.: "opencode-go/glm-5.1"). */
-  id: string;
-  /** ID do provider ao qual o modelo pertence. */
-  providerId: string;
-  /** Nome do modelo sem o prefixo do provider (ex.: "glm-5.1"). */
-  modelName: string;
-  /** Nome amigável quando disponível via --verbose. */
-  displayName?: string;
-}
-
-/** Resultado da consulta de catálogo ao OpenCode CLI. */
-export interface OpenCodeCatalogResult {
-  providers: OpenCodeProvider[];
-  models: OpenCodeModel[];
-  modelsByProvider: Record<string, OpenCodeModel[]>;
-  /** Timestamp ISO 8601 da captura. */
-  fetchedAt: string;
-  /** Mensagem de erro quando o catálogo não pôde ser obtido. */
-  error?: string;
-}
-
 export interface AgentModelSettingInput {
   modelProviderId?: string;
   modelName?: string;
@@ -215,6 +193,15 @@ export interface MissionAgentRequirement {
   reason: string;
 }
 
+/**
+ * @deprecated Legado da fase Electron. A PR 014 substituiu
+ * esta função pela readiness real (`resolveExecutionReadiness`
+ * no `shared` e `execution_resolver.rs` no backend). O
+ * Agent Engine real sempre roda Planner / Developer / QA /
+ * Finalizer, e o resultado desta função (`backend-dev` /
+ * `frontend-dev` / `mobile-dev`) não é mais usado pela UI
+ * ativa. Pode continuar sendo chamada em testes legados.
+ */
 export function getMissionAgentRequirements(
   intent: MissionIntent,
   suggestedAgents: AgentRole[] = []
@@ -241,6 +228,12 @@ export function getMissionAgentRequirements(
 export const DEFAULT_FALLBACK_AGENT_ROLE: AgentRole = "backend-dev";
 
 /**
+ * @deprecated Legado da fase Electron. A PR 014 rebaixou a
+ * recomendação por stack a papel decorativo — o Agent Engine
+ * real sempre usa `FluxoraAgentRole = "developer"` (e
+ * `planner` / `qa` / `finalizer`). Esta função existe apenas
+ * para hints de foco no `MissionDiagnosticModal`.
+ *
  * Recommendation map between a project's stack tags and the best-suited
  * developer role to handle a delivery mission in that stack.
  */
@@ -379,52 +372,23 @@ export interface ResolvedAgentModel {
 
 export function resolveAgentModel(
   agent: Pick<Agent, "modelProviderId" | "modelName">,
-  catalog: OpenCodeCatalogResult | null | undefined,
   globalDefault: GlobalDefaultAgentModel
 ): ResolvedAgentModel | null {
   if (agent.modelProviderId && agent.modelName) {
-    // Verifica contra o catálogo se ele estiver disponível.
-    if (catalog) {
-      const provider = catalog.providers.find((p) => p.id === agent.modelProviderId);
-      const model = catalog.models.find((m) => m.id === agent.modelName);
-      if (provider && model) {
-        return {
-          providerId: provider.id,
-          providerName: provider.displayName,
-          modelName: agent.modelName,
-          source: "agent",
-        };
-      }
-    } else {
-      // Sem catálogo, aceita o que está salvo.
-      return {
-        providerId: agent.modelProviderId,
-        providerName: agent.modelProviderId,
-        modelName: agent.modelName,
-        source: "agent",
-      };
-    }
+    return {
+      providerId: agent.modelProviderId,
+      providerName: agent.modelProviderId,
+      modelName: agent.modelName,
+      source: "agent",
+    };
   }
   if (globalDefault.providerId && globalDefault.modelName) {
-    if (catalog) {
-      const provider = catalog.providers.find((p) => p.id === globalDefault.providerId);
-      const model = catalog.models.find((m) => m.id === globalDefault.modelName);
-      if (provider && model) {
-        return {
-          providerId: provider.id,
-          providerName: provider.displayName,
-          modelName: globalDefault.modelName,
-          source: "global-default",
-        };
-      }
-    } else {
-      return {
-        providerId: globalDefault.providerId,
-        providerName: globalDefault.providerId,
-        modelName: globalDefault.modelName,
-        source: "global-default",
-      };
-    }
+    return {
+      providerId: globalDefault.providerId,
+      providerName: globalDefault.providerId,
+      modelName: globalDefault.modelName,
+      source: "global-default",
+    };
   }
   return null;
 }
@@ -562,14 +526,13 @@ export interface MissionPrecheckInput {
   suggestedAgents?: AgentRole[];
   activeProject?: { stack?: string[] };
   agents: Pick<Agent, "id" | "name" | "role" | "modelProviderId" | "modelName" | "enabled">[];
-  catalog?: OpenCodeCatalogResult | null;
 }
 
 export function buildMissionPrecheck(input: MissionPrecheckInput): MissionPrecheck {
-  const { intent, suggestedAgents = [], activeProject, agents, catalog = null } = input;
+  const { intent, suggestedAgents = [], activeProject, agents } = input;
   const pipeline = resolveMissionPipeline(intent);
   const requirements = getMissionAgentRequirements(intent, suggestedAgents);
-  const hasEnabledProvider = catalog ? catalog.providers.length > 0 : agents.some((a) => Boolean(a.modelProviderId && a.modelName));
+  const hasEnabledProvider = agents.some((a) => Boolean(a.modelProviderId && a.modelName));
   const missingRoles: AgentRole[] = [];
   const recommendations: MissionPrecheck["recommendations"] = [];
   const blockingReasons: string[] = [];
@@ -583,7 +546,7 @@ export function buildMissionPrecheck(input: MissionPrecheckInput): MissionPreche
     if (!agent) {
       missingRoles.push(req.role);
       blockingReasons.push(`Papel sem agente cadastrado: ${formatAgentRoleLabel(req.role)}.`);
-    } else if (!isAgentConfiguredForRealExecution(agent, catalog)) {
+    } else if (!isAgentConfiguredForRealExecution(agent)) {
       blockingReasons.push(`${agent.name} (${formatAgentRoleLabel(req.role)}) sem provider/modelo ativo.`);
     }
   }
@@ -598,7 +561,7 @@ export function buildMissionPrecheck(input: MissionPrecheckInput): MissionPreche
       recommendations.push({
         role,
         agentName: matched?.name,
-        ready: matched ? isAgentConfiguredForRealExecution(matched, catalog) : false,
+        ready: matched ? isAgentConfiguredForRealExecution(matched) : false,
       });
     }
   }
@@ -615,35 +578,25 @@ export function buildMissionPrecheck(input: MissionPrecheckInput): MissionPreche
 }
 
 export function isAgentConfiguredForRealExecution(
-  agent: Pick<Agent, "modelProviderId" | "modelName" | "enabled">,
-  catalog?: OpenCodeCatalogResult | null
+  agent: Pick<Agent, "modelProviderId" | "modelName" | "enabled">
 ): boolean {
   if (!agent.enabled) return false;
   if (!agent.modelProviderId) return false;
   if (!agent.modelName || !agent.modelName.trim()) return false;
-  // Sem catálogo carregado, aceitamos o que está salvo (não bloqueamos a UI).
-  if (!catalog) return true;
-  // A lista atual de providers/modelos é a fonte de verdade para prontidão:
-  // o provider precisa existir e o modelo precisa estar disponível.
-  const providerExists = catalog.providers.some((p) => p.id === agent.modelProviderId);
-  if (!providerExists) return false;
-  const modelExists = catalog.models.some((m) => m.id === agent.modelName);
-  return modelExists;
+  return true;
 }
 
 export function isAgentReadyWithFallback(
   agent: Pick<Agent, "modelProviderId" | "modelName" | "enabled">,
-  catalog?: OpenCodeCatalogResult | null,
   globalDefault?: GlobalDefaultAgentModel
 ): boolean {
-  if (isAgentConfiguredForRealExecution(agent, catalog)) return true;
+  if (isAgentConfiguredForRealExecution(agent)) return true;
   if (!agent.enabled) return false;
   return Boolean(globalDefault?.providerId && globalDefault.modelName);
 }
 
 export function getAgentReadiness(
   agent: Pick<Agent, "id" | "modelProviderId" | "modelName" | "enabled">,
-  catalog?: OpenCodeCatalogResult | null,
   globalDefault?: GlobalDefaultAgentModel
 ): AgentReadiness {
   const reasons: string[] = [];
@@ -656,22 +609,12 @@ export function getAgentReadiness(
       reasons.push("Nenhum provider selecionado.");
       reasons.push("Nenhum fallback real do Mission Engine está disponível.");
     }
-  } else {
-    const providerExists = !catalog || catalog.providers.some((p) => p.id === agent.modelProviderId);
-    if (!providerExists) {
-      reasons.push("Provider selecionado não está disponível no Provider Engine atual.");
-    }
   }
   if (!agent.modelName || !agent.modelName.trim()) {
     if (fallback) {
       reasons.push("Sem modelo próprio. Usará o modelo global padrão.");
     } else {
       reasons.push("Nenhum modelo selecionado.");
-    }
-  } else if (catalog) {
-    const modelExists = catalog.models.some((m) => m.id === agent.modelName);
-    if (!modelExists) {
-      reasons.push("Modelo selecionado não está disponível no Provider Engine atual.");
     }
   }
   const blocking = !agent.enabled || (!fallback && (!agent.modelProviderId || !agent.modelName?.trim()));
@@ -767,8 +710,7 @@ export interface WorkflowRerunInput {
   realStrategy?: RealWorkflowStrategy;
   /**
    * Override do timeout (ms) aplicado apenas a esta reexecução.
-   * Quando fornecido, atualiza temporariamente o default do engine
-   * e persiste nas configurações do OpenCode.
+   * Quando fornecido, persiste no engine.
    */
   defaultTimeoutMs?: number;
 }
@@ -1061,6 +1003,236 @@ export interface AgentStepOutput {
 }
 
 // ============================================================================
+// PR 014 — Fonte única de resolução de execução
+// ============================================================================
+//
+// A PR 014 introduz o contrato canônico que conecta o Agent Engine
+// real (`agents.json` com Planner / Developer / QA / Finalizer), o
+// Provider Engine real (`providers.json`) e o Mission Engine em
+// uma única fonte de verdade.
+//
+// Toda a UI (AgentsPage, diagnóstico da missão, banner global) e
+// toda a execução (`missions_run`) passam a consumir
+// `resolveExecutionReadiness(...)`. O backend Rust implementa a
+// mesma lógica em `execution_resolver.rs` e expõe via comando
+// Tauri `missions_get_readiness`. Quando a UI roda em runtime
+// Tauri ela sempre prefere a resposta do backend; quando roda no
+// navegador (Vite dev) cai no fallback TS abaixo, que produz
+// resultados idênticos.
+
+/** Resolved provider/model/state for a single real agent. */
+export interface EffectiveExecutionAgent {
+  agentId: string;
+  name: string;
+  role: FluxoraAgentRole;
+  order: number;
+  enabled: boolean;
+  providerId?: string;
+  providerName?: string;
+  model?: string;
+  /** True when the agent does not declare its own provider/model. */
+  inheritsProvider: boolean;
+  /** True when the agent does not declare its own model. */
+  inheritsModel: boolean;
+  /** Whether the agent can run without issues right now. */
+  ready: boolean;
+  /** Human-readable issues blocking execution. */
+  issues: string[];
+}
+
+export interface MissionExecutionReadiness {
+  projectId?: string;
+  missionId?: string;
+  defaultProviderId?: string;
+  defaultProviderName?: string;
+  defaultModel?: string;
+  /** Effective agents for the next mission run (always 4 in this PR). */
+  agents: EffectiveExecutionAgent[];
+  /** `true` only when all 4 agents are `ready`. */
+  ready: boolean;
+  /** Human-readable issues blocking mission execution overall. */
+  issues: string[];
+  /** ISO 8601 — useful to spot stale readiness in the UI. */
+  resolvedAt: string;
+}
+
+export interface ResolveExecutionReadinessInput {
+  agents: AgentConfig[];
+  providers: AiProviderConfig[];
+  projectId?: string;
+  missionId?: string;
+  /** Override of the default provider (e.g. the user picking one in the UI). */
+  providerId?: string;
+  /** Override of the default model (e.g. the user picking one in the UI). */
+  model?: string;
+}
+
+const REAL_DEFAULT_ROLES: FluxoraAgentRole[] = ["planner", "developer", "qa", "finalizer"];
+
+function findAgentForRole(
+  agents: AgentConfig[],
+  role: FluxoraAgentRole
+): AgentConfig | undefined {
+  return agents.find((agent) => agent.role === role);
+}
+
+function findAgentById(agents: AgentConfig[], agentId: string): AgentConfig | undefined {
+  return agents.find((agent) => agent.id === agentId);
+}
+
+function describeProvider(
+  providerId: string | undefined,
+  providers: AiProviderConfig[]
+): { id: string | undefined; name: string | undefined } {
+  if (!providerId) return { id: undefined, name: undefined };
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (!provider) return { id: providerId, name: providerId };
+  return { id: provider.id, name: provider.name };
+}
+
+function effectiveAgent(
+  agent: AgentConfig,
+  fallbackProviderId: string | undefined,
+  fallbackModel: string | undefined,
+  providers: AiProviderConfig[]
+): EffectiveExecutionAgent {
+  const issues: string[] = [];
+  const inheritsProvider = !agent.providerId;
+  const inheritsModel = !agent.model;
+  const effectiveProviderId = inheritsProvider ? fallbackProviderId : agent.providerId;
+  const effectiveModel = inheritsModel ? fallbackModel : agent.model;
+  const enabled = agent.status === "enabled";
+  if (!enabled) {
+    issues.push("Agente desabilitado. Habilite o agente para executar a missão.");
+  }
+  if (!effectiveProviderId) {
+    issues.push(
+      "Nenhum provider configurado. Cadastre um provider em Configurações > Providers."
+    );
+  } else {
+    const provider = providers.find((entry) => entry.id === effectiveProviderId);
+    if (!provider) {
+      issues.push(`Provider '${effectiveProviderId}' não encontrado no Provider Engine.`);
+    } else if (!provider.enabled) {
+      issues.push(`Provider '${provider.name}' está desabilitado.`);
+    } else if (!provider.defaultModel && inheritsModel) {
+      issues.push(
+        `Provider '${provider.name}' sem modelo padrão. Defina um modelo padrão para executar missões.`
+      );
+    }
+  }
+  if (!effectiveModel || !effectiveModel.trim()) {
+    issues.push(
+      fallbackModel
+        ? "Modelo não resolvido a partir do provider padrão."
+        : "Nenhum modelo selecionado para este agente."
+    );
+  }
+  const providerMeta = describeProvider(effectiveProviderId, providers);
+  return {
+    agentId: agent.id,
+    name: agent.name,
+    role: agent.role,
+    order: agent.order,
+    enabled,
+    providerId: providerMeta.id,
+    providerName: providerMeta.name,
+    model: effectiveModel,
+    inheritsProvider,
+    inheritsModel,
+    ready: enabled && Boolean(providerMeta.id) && Boolean(effectiveModel && effectiveModel.trim()),
+    issues,
+  };
+}
+
+/**
+ * Single source of truth used by AgentsPage, mission diagnostic and
+ * Mission Engine. Restores the 4 real default agents if `agents` is
+ * empty, then resolves provider/model for each agent.
+ */
+export function resolveExecutionReadiness(
+  input: ResolveExecutionReadinessInput
+): MissionExecutionReadiness {
+  const { agents, providers } = input;
+  const explicitProviderId = input.providerId?.trim() || undefined;
+  const explicitModel = input.model?.trim() || undefined;
+
+  // Resolve fallback real provider/model from `providers.json`.
+  const enabledProvider = providers.find((provider) => provider.enabled);
+  const fallbackProviderId =
+    explicitProviderId ||
+    enabledProvider?.id;
+  const fallbackProvider = fallbackProviderId
+    ? providers.find((provider) => provider.id === fallbackProviderId)
+    : undefined;
+  const fallbackModel =
+    explicitModel ||
+    fallbackProvider?.defaultModel?.trim() ||
+    undefined;
+
+  const overallIssues: string[] = [];
+  if (!fallbackProviderId) {
+    overallIssues.push(
+      "Nenhum provider configurado. Cadastre um provider em Configurações > Providers."
+    );
+  } else if (!fallbackProvider) {
+    overallIssues.push(`Provider '${fallbackProviderId}' não encontrado no Provider Engine.`);
+  } else if (!fallbackProvider.enabled) {
+    overallIssues.push(`Provider '${fallbackProvider.name}' está desabilitado.`);
+  } else if (!fallbackModel) {
+    overallIssues.push(
+      `Provider '${fallbackProvider.name}' sem modelo padrão. Defina um modelo padrão para executar missões.`
+    );
+  }
+
+  // Build the agent list. If empty, the backend will create the
+  // 4 defaults — but here we expose the resolved shape regardless.
+  const orderedAgents: AgentConfig[] = [...agents].sort((a, b) => a.order - b.order);
+  const resolvedAgents: EffectiveExecutionAgent[] = [];
+  const missingRoles: FluxoraAgentRole[] = [];
+
+  for (const role of REAL_DEFAULT_ROLES) {
+    const matched = findAgentForRole(orderedAgents, role);
+    if (matched) {
+      resolvedAgents.push(
+        effectiveAgent(matched, fallbackProviderId, fallbackModel, providers)
+      );
+    } else {
+      missingRoles.push(role);
+    }
+  }
+  // Surface any extra agents (custom) so they are visible too.
+  for (const agent of orderedAgents) {
+    if (REAL_DEFAULT_ROLES.includes(agent.role)) continue;
+    if (!agent.id) continue;
+    resolvedAgents.push(
+      effectiveAgent(agent, fallbackProviderId, fallbackModel, providers)
+    );
+  }
+
+  for (const role of missingRoles) {
+    overallIssues.push(
+      `Agente real ausente: ${role}. Restaure os agentes padrão na tela de Agentes.`
+    );
+  }
+
+  const allAgentsReady = resolvedAgents.length > 0 && resolvedAgents.every((agent) => agent.ready);
+  const ready = allAgentsReady && missingRoles.length === 0 && overallIssues.length === 0;
+
+  return {
+    projectId: input.projectId,
+    missionId: input.missionId,
+    defaultProviderId: fallbackProviderId,
+    defaultProviderName: fallbackProvider?.name,
+    defaultModel: fallbackModel,
+    agents: resolvedAgents,
+    ready,
+    issues: overallIssues,
+    resolvedAt: new Date().toISOString(),
+  };
+}
+
+// ============================================================================
 // PR 011 — Agent Engine próprio (Planner / Developer / QA / Finalizer)
 // ============================================================================
 //
@@ -1195,114 +1367,10 @@ export interface VoiceAudioRecord {
 }
 
 // ============================================================================
-// PR 002 — OpenCode, Git, Audio, Execution Mode
+// Execution mode, background jobs, commands, files
 // ============================================================================
 
 export type WorkflowExecutionMode = "simulated" | "real";
-export type OpenCodeStatus = "not_configured" | "not_detected" | "detected" | "running" | "error";
-
-export interface OpenCodeSettings {
-  binaryPath: string;
-  defaultTimeoutMs: number;
-  enabled: boolean;
-}
-
-export interface OpenCodeDetection {
-  status: OpenCodeStatus;
-  binaryPath: string;
-  version?: string;
-  message?: string;
-  checkedAt: string;
-}
-
-export type OpenCodeOutputFormat = "default" | "json";
-
-export type OpenCodeDiagnosticStatus =
-  | "not_installed"
-  | "detected"
-  | "usable"
-  | "smoke_test_failed"
-  | "environment_mismatch"
-  | "session_warning"
-  | "misconfigured"
-  | "auth_error"
-  | "provider_error"
-  | "permission_error"
-  | "unknown_error";
-
-export type OpenCodeDiagnosticSeverity = "success" | "warning" | "error";
-
-export interface OpenCodeDiagnosticCheck {
-  name: string;
-  command: string;
-  success: boolean;
-  exitCode?: number;
-  stdout?: string;
-  stderr?: string;
-  durationMs?: number;
-  severity: "info" | "warning" | "error";
-  interpretation: string;
-}
-
-export interface OpenCodeDiagnosticEnvironment {
-  platform: string;
-  arch: string;
-  cwd: string;
-  execPath: string;
-  home?: string;
-  path?: string;
-  shell?: string;
-  resolvedBinaryPath?: string;
-}
-
-export interface OpenCodeDiagnosticResult {
-  status: OpenCodeDiagnosticStatus;
-  severity: OpenCodeDiagnosticSeverity;
-  binaryPath: string;
-  resolvedPath?: string;
-  version?: string;
-  providersDetected?: string[];
-  supportsRun: boolean;
-  supportsFormatJson: boolean;
-  supportsAgent: boolean;
-  supportsModel: boolean;
-  supportsDir: boolean;
-  isCliUsable: boolean;
-  isRunCommandAvailable: boolean;
-  isSmokeTestBlocking: boolean;
-  runSmokeTest?: {
-    attempted: boolean;
-    success: boolean;
-    exitCode?: number;
-    stdout?: string;
-    stderr?: string;
-    errorMessage?: string;
-  };
-  controlledRunTest?: {
-    attempted: boolean;
-    success: boolean;
-    exitCode?: number;
-    stdout?: string;
-    stderr?: string;
-    jsonEvents?: unknown[];
-    changedFilesDetected?: boolean;
-  };
-  checks: OpenCodeDiagnosticCheck[];
-  environment: OpenCodeDiagnosticEnvironment;
-  recommendations: string[];
-  checkedAt: string;
-}
-
-export interface OpenCodeDiagnosticInput {
-  binaryPath: string;
-  projectPath?: string;
-  runSmokeTest?: boolean;
-  timeoutMs?: number;
-  format?: OpenCodeOutputFormat;
-  controlledRunTest?: boolean;
-  environmentOverrides?: Record<string, string | undefined>;
-  environment?: Partial<OpenCodeDiagnosticEnvironment>;
-}
 
 export interface BackgroundWorkflowJob {
   id: string;
@@ -1350,37 +1418,7 @@ export interface FileDiff {
   createdAt: string;
 }
 
-export interface OpenCodeSession {
-  id: string;
-  workflowRunId: string;
-  projectId: string;
-  commandRunId?: string;
-  prompt: string;
-  status: "running" | "completed" | "failed" | "cancelled";
-  startedAt: string;
-  completedAt?: string;
-}
 
-export interface ControlledExecutionRunInput {
-  workflowRunId: string;
-}
-
-export interface ControlledExecutionRunResult {
-  status: "completed" | "failed" | "cancelled";
-  workflowRunId: string;
-  projectId: string;
-  projectRoot: string;
-  projectPath: string;
-  sandboxReadmePath: string;
-  changedFiles: ChangedFileSummary[];
-  outOfScopeFiles: string[];
-  finalApprovalId?: string;
-}
-
-export interface ControlledExecutionRunJob {
-  jobId: string;
-  workflowRunId: string;
-}
 
 export type AudioProviderType = "manual" | "whisper_local_managed" | "whisper_http" | "whisper_local" | "openai_whisper";
 
@@ -1661,12 +1699,10 @@ export interface FluxoraEvent {
 // PR 007 — Provider Engine próprio
 // ============================================================================
 //
-// Tipos do motor de providers do FluxoraV1. Substitui a dependência
-// conceitual do OpenCode CLI como intermediário para chamadas a
-// provedores de IA. A UI atual continua consumindo os tipos
-// `OpenCode*` legados para `getCatalog` etc.; este bloco adiciona
-// a superfície nova (`AiProviderConfig`, `AiModelInfo`, etc.) sem
-// duplicar tipos existentes.
+// Tipos do motor de providers do FluxoraV1. Substitui o antigo adaptador
+// externo como intermediário para chamadas a provedores de IA.
+// Este bloco define a superfície canônica (`AiProviderConfig`,
+// `AiModelInfo`, etc.) do Provider Engine.
 
 /** Tipos de provider reconhecidos pelo Provider Engine. */
 export type ProviderKind =
@@ -2391,6 +2427,19 @@ export interface FluxoraAPI {
     listLogs(missionId: string): Promise<MissionLog[]>;
     /** Limpa o arquivo de missões (apenas dev/debug). */
     clear(): Promise<void>;
+    /**
+     * PR 014 — Retorna a readiness agregada da missão
+     * (defaultProviderId, defaultModel, agents efetivos,
+     * issues). Usa a mesma fonte de verdade do `missions_run`
+     * (Agent Engine + Provider Engine reais). No fallback
+     * browser, computa localmente via `resolveExecutionReadiness`.
+     */
+    getReadiness(input?: {
+      projectId?: string;
+      missionId?: string;
+      providerId?: string;
+      model?: string;
+    }): Promise<MissionExecutionReadiness>;
   };
   approvals: {
     listActionable(): Promise<Approval[]>;
@@ -2588,12 +2637,10 @@ export interface FluxoraAPI {
   // PR 007 — Provider Engine próprio
   // ============================================================================
   //
-  // Esta superfície coexiste com `opencode.getCatalog` etc. (legado do
-  // Electron). Em runtime Tauri, o `desktopBridge` roteia `opencode.getCatalog`
-  // para o Provider Engine quando há providers cadastrados. A superfície
-  // `providers.*` é a forma canônica nova.
+  // Superfície canônica do Provider Engine do FluxoraV1.
   providers: {
     /** Lista todos os providers configurados. */
+    list(): Promise<AiProviderConfig[]>;
     list(): Promise<AiProviderConfig[]>;
     /** Retorna um provider pelo `id`. */
     get(id: string): Promise<AiProviderConfig | null>;
@@ -2647,11 +2694,6 @@ export interface FluxoraAPI {
   // PR 005 — Barramento de eventos do FluxoraV1 (Tauri event system)
   // ============================================================================
   //
-  // Os métodos `list`/`onWorkflowEvent`/`onJobUpdated`/`onApprovalChange`/
-  // `onOpenCodeStdout`/`onOpenCodeStderr`/`onOpenCodeJsonEvent` são o legado
-  // do mock do Electron, preservados para a UI existente. Eles só têm
-  // emissores reais quando o Mission Engine estiver em produção.
-  //
   // Os métodos `subscribe`/`on`/`listRecent`/`emitDiagnostic`/`clearRecent`/
   // `unsubscribe`/`off` formam a base real do barramento do FluxoraV1. Em
   // runtime Tauri, escutam o canal `fluxora-event` emitido pelo backend
@@ -2667,12 +2709,6 @@ export interface FluxoraAPI {
     onJobUpdated(callback: (job: BackgroundWorkflowJob) => void): () => void;
     /** Listener legado: mudança em aprovação. Mock até o Mission Engine. */
     onApprovalChange(callback: (approval: Approval) => void): () => void;
-    /** Listener legado: stdout do OpenCode. Mock até o Mission Engine. */
-    onOpenCodeStdout(callback: (payload: { workflowRunId: string; jobId?: string; chunk: string }) => void): () => void;
-    /** Listener legado: stderr do OpenCode. Mock até o Mission Engine. */
-    onOpenCodeStderr(callback: (payload: { workflowRunId: string; jobId?: string; chunk: string }) => void): () => void;
-    /** Listener legado: json-event do OpenCode. Mock até o Mission Engine. */
-    onOpenCodeJsonEvent(callback: (payload: { workflowRunId: string; jobId?: string; event: unknown }) => void): () => void;
     /** Assina o barramento real de eventos do FluxoraV1. */
     subscribe(callback: (event: FluxoraEvent) => void): () => void;
     /** Remove uma inscrição retornada por `subscribe`/`on`. */
@@ -2695,26 +2731,6 @@ export interface FluxoraAPI {
     }): Promise<FluxoraEvent>;
     /** Limpa o ring buffer de eventos recentes. */
     clearRecent(): Promise<void>;
-  };
-  opencode: {
-    detect(): Promise<OpenCodeDetection>;
-    getSettings(): Promise<OpenCodeSettings>;
-    updateSettings(input: Partial<OpenCodeSettings>): Promise<OpenCodeSettings>;
-    getStatus(): Promise<OpenCodeStatus>;
-    diagnostics: {
-      run(input: OpenCodeDiagnosticInput): Promise<OpenCodeDiagnosticResult>;
-      copyLastResult(): Promise<boolean>;
-    };
-    controlledExecution: {
-      run(input: ControlledExecutionRunInput): Promise<ControlledExecutionRunJob>;
-      getResult(jobId: string): Promise<ControlledExecutionRunResult | null>;
-    };
-    /** Retorna o catálogo completo (providers + modelos) vindo do OpenCode CLI. */
-    getCatalog(): Promise<OpenCodeCatalogResult>;
-    /** Retorna os modelos de um provider específico. */
-    getModelsForProvider(providerId: string): Promise<OpenCodeModel[]>;
-    /** Força refresh do catálogo (invalida o cache do backend). */
-    refreshCatalog(): Promise<OpenCodeCatalogResult>;
   };
   git: {
     inspect(projectId: string): Promise<GitInspectionResult>;

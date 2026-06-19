@@ -4,11 +4,11 @@ import type {
   WorkflowRun,
   Agent,
   AgentConfig,
-  OpenCodeCatalogResult,
   AgentStepOutput,
 } from "@fluxora/shared";
 import { isAgentConfiguredForRealExecution } from "@fluxora/shared";
 import { loadProviderCatalog } from "../lib/providerCatalog";
+import type { ProviderCatalogResult } from "../lib/providerCatalog";
 
 // ── Token estimation constants ──────────────────────────────────────────────
 const CHARS_PER_TOKEN = 3.5;
@@ -217,7 +217,7 @@ export function useUsageStats(filters: UsageFilters) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [allRuns, setAllRuns] = useState<WorkflowRun[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [catalog, setCatalog] = useState<OpenCodeCatalogResult | null>(null);
+  const [catalog, setCatalog] = useState<ProviderCatalogResult | null>(null);
   const [stepOutputsMap, setStepOutputsMap] = useState<Map<string, AgentStepOutput[]>>(new Map());
   const loadGenRef = useRef(0);
 
@@ -323,7 +323,7 @@ export function useUsageStats(filters: UsageFilters) {
         const displayName = extractModelName(agent.modelName);
         const existing = modelMap.get(agent.modelName) || {
           modelName: displayName, agentNames: [],
-          isReady: isAgentConfiguredForRealExecution(agent, catalog),
+          isReady: isAgentConfiguredForRealExecution(agent),
         };
         existing.agentNames.push(agent.name);
         modelMap.set(agent.modelName, existing);
@@ -369,7 +369,7 @@ export function useUsageStats(filters: UsageFilters) {
         return {
           agentId: agent.id, agentName: agent.name, agentRole: agent.role,
           modelName: agent.modelName ? extractModelName(agent.modelName) : undefined,
-          isReady: isAgentConfiguredForRealExecution(agent, catalog),
+          isReady: isAgentConfiguredForRealExecution(agent),
           runs, estimatedTokens, estimatedCost, successRate,
         };
       }).sort((a, b) => b.runs - a.runs);

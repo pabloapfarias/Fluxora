@@ -5,8 +5,9 @@ import {
   Cpu,
   Sparkles,
 } from "lucide-react";
-import { isAgentConfiguredForRealExecution, type Agent, type OpenCodeCatalogResult } from "@fluxora/shared";
+import { isAgentConfiguredForRealExecution, type Agent } from "@fluxora/shared";
 import { ActionButton, MissionCard } from "../ui";
+import type { ProviderCatalogResult } from "../../lib/providerCatalog";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -35,13 +36,13 @@ function iconForRole(role: string) {
 
 interface AgentsStatusPanelProps {
   agents: Agent[];
-  catalog: OpenCodeCatalogResult | null;
+  catalog: ProviderCatalogResult | null;
   onManage: () => void;
 }
 
 export function AgentsStatusPanel({ agents, catalog, onManage }: AgentsStatusPanelProps) {
   const list = [...agents].sort((a, b) => a.name.localeCompare(b.name));
-  const readyCount = list.filter((agent) => isAgentConfiguredForRealExecution(agent, catalog)).length;
+  const readyCount = list.filter((agent) => isAgentConfiguredForRealExecution(agent)).length;
 
   return (
     <MissionCard className="overflow-hidden" padding="sm">
@@ -62,7 +63,7 @@ export function AgentsStatusPanel({ agents, catalog, onManage }: AgentsStatusPan
       <div className="divide-y divide-border-subtle">
         {list.map((a) => {
           const Icon = iconForRole(a.role);
-          const ready = isAgentConfiguredForRealExecution(a, catalog);
+          const ready = isAgentConfiguredForRealExecution(a);
           const status = !a.enabled ? "inactive" : ready ? "ready" : "pending";
           const statusLabel = status === "ready" ? "Pronto" : status === "pending" ? "Pendente" : "Inativo";
           const statusClass =

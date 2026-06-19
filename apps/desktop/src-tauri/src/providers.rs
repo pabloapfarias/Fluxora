@@ -1,7 +1,7 @@
 // PR 007 — Provider Engine próprio do FluxoraV1
 //
 // Cria um motor de providers em Rust/Tauri, eliminando a
-// dependência conceitual do OpenCode CLI como intermediário para
+// dependência conceitual de intermediário externo para
 // chamadas aos modelos de IA. Esta PR entrega apenas a
 // infraestrutura de providers; agentes reais, Mission Engine,
 // streaming, tool calling e storage seguro de secrets ficam

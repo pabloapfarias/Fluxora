@@ -6,6 +6,7 @@ import {
   type AiModelInfo,
   type AiProviderConfig,
   type FluxoraAgentRole,
+  type MissionExecutionReadiness,
 } from "@fluxora/shared";
 
 type AgentDraft = {
@@ -52,6 +53,7 @@ export function AgentsPage() {
   const [savingAgentId, setSavingAgentId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Record<string, { type: "success" | "error"; message: string }>>({});
   const [resettingDefaults, setResettingDefaults] = useState(false);
+  const [readiness, setReadiness] = useState<MissionExecutionReadiness | null>(null);
 
   const runtimeFallback = useMemo(
     () => deriveProviderEngineGlobalDefault(providers),
@@ -75,6 +77,15 @@ export function AgentsPage() {
         .filter((agent) => Boolean(agent.providerId))
         .map((agent) => loadModels(agent.id, agent.providerId || ""))
     );
+    // PR 014 — A AgentsPage consulta a MESMA readiness que
+    // `missions_run` usa, para garantir que o provider/modelo
+    // efetivo mostrado aqui bate com o que será executado.
+    try {
+      const nextReadiness = await window.fluxora.missions.getReadiness();
+      setReadiness(nextReadiness);
+    } catch {
+      setReadiness(null);
+    }
   }
 
   async function loadModels(agentId: string, providerId: string) {
@@ -186,14 +197,14 @@ export function AgentsPage() {
       <div className="rounded-xl border border-border bg-bg-card px-4 py-3 text-[12px] text-text-secondary">
         {runtimeFallback.providerId && runtimeFallback.modelName ? (
           <span>
-            Fallback real atual do Mission Engine:
+            Provider padrão de execução:
             {" "}
             <strong className="text-text-primary">{runtimeFallback.providerId}</strong>
             {" / "}
             <strong className="text-text-primary">{runtimeFallback.modelName}</strong>.
           </span>
         ) : (
-          <span>Nenhum fallback real disponível. Configure um provider habilitado com <code className="px-1 rounded bg-bg-input">defaultModel</code>.</span>
+          <span>Nenhum provider configurado. Cadastre um provider em Configurações &gt; Providers.</span>
         )}
       </div>
 
@@ -209,6 +220,7 @@ export function AgentsPage() {
             const loadingModels = loadingModelsByAgent[agent.id] || false;
             const providerName = draft.providerId ? describeProvider(draft.providerId, providers) : null;
             const inheritsMissionFallback = !draft.providerId || !draft.model;
+            const readinessAgent = readiness?.agents.find((entry) => entry.agentId === agent.id);
             return (
               <div key={agent.id} className="bg-bg-card border border-border rounded-xl p-4 space-y-4">
                 <div className="flex items-start justify-between gap-4">
@@ -242,7 +254,7 @@ export function AgentsPage() {
                       onChange={(event) => void handleProviderChange(agent.id, event.target.value)}
                       className="flux-input"
                     >
-                      <option value="">Herdar da missão / fallback real</option>
+                      <option value="">Herdar do provider padrão</option>
                       {providers.map((provider) => (
                         <option key={provider.id} value={provider.id}>
                           {provider.name} • {provider.kind}
@@ -261,7 +273,7 @@ export function AgentsPage() {
                     >
                       <option value="">
                         {!draft.providerId
-                          ? "Herdar da missão / fallback real"
+                          ? "Herdar do provider padrão"
                           : loadingModels
                             ? "Carregando modelos..."
                             : models.length === 0
@@ -291,20 +303,20 @@ export function AgentsPage() {
                     Provider efetivo:
                     {" "}
                     <span className="text-text-primary font-medium">
-                      {providerName || runtimeFallback.providerId || "não resolvido"}
+                      {readinessAgent?.providerName || providerName || runtimeFallback.providerId || "não resolvido"}
                     </span>
                   </div>
                   <div className="mt-1">
                     Modelo efetivo:
                     {" "}
                     <span className="text-text-primary font-medium">
-                      {draft.model || runtimeFallback.modelName || "não resolvido"}
+                      {readinessAgent?.model || draft.model || runtimeFallback.modelName || "não resolvido"}
                     </span>
                   </div>
                   {inheritsMissionFallback && (
                     <div className="mt-2 flex items-start gap-2 text-[11.5px]">
                       <Sparkles size={12} className="text-accent flex-shrink-0 mt-0.5" />
-                      <span>Este agente herda provider/modelo da missão ou do fallback real do Mission Engine.</span>
+                      <span>Usa o provider padrão de execução quando nenhum provider específico é definido.</span>
                     </div>
                   )}
                 </div>
