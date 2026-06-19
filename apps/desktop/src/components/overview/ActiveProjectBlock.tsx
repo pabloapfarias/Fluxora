@@ -13,12 +13,13 @@ import {
   Sparkles,
 } from "lucide-react";
 import {
+  deriveProviderEngineGlobalDefault,
   formatAgentRoleLabel,
   isAgentConfiguredForRealExecution,
   isAgentReadyWithFallback,
-  readGlobalDefaultAgentModel,
   recommendDeveloperRoleForStack,
   type Agent,
+  type AiProviderConfig,
   type OpenCodeCatalogResult,
   type Project,
 } from "@fluxora/shared";
@@ -44,6 +45,8 @@ export interface ActiveProjectBlockProps {
   validationResult?: { valid: boolean; error?: string } | null;
   /** Lista de agentes cadastrados (para prontidão) */
   agents?: Agent[];
+  /** Providers reais do Provider Engine */
+  providers?: AiProviderConfig[];
   /** Catálogo do OpenCode (para prontidão) */
   catalog?: OpenCodeCatalogResult | null;
 }
@@ -61,6 +64,7 @@ export function ActiveProjectBlock({
   isValidating = false,
   validationResult,
   agents = [],
+  providers = [],
   catalog = null,
 }: ActiveProjectBlockProps) {
   const isOpencodeDetected = opencodeStatus === "detected" || opencodeStatus === "running";
@@ -70,9 +74,7 @@ export function ActiveProjectBlock({
         const role = recommendDeveloperRoleForStack(project.stack);
         const agent = agents.find((entry) => entry.role === role);
         const direct = agent ? isAgentConfiguredForRealExecution(agent, catalog) : false;
-        const fallback = readGlobalDefaultAgentModel(
-          typeof window !== "undefined" ? window.localStorage : null,
-        );
+        const fallback = deriveProviderEngineGlobalDefault(providers);
         const ready = agent ? isAgentReadyWithFallback(agent, catalog, fallback) : false;
         return {
           role,

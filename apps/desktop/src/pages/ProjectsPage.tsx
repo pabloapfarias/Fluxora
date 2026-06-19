@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Edit2, Trash2, X, FolderOpen, FolderSearch, Sparkles } from "lucide-react";
 import {
+  deriveProviderEngineGlobalDefault,
   isAgentConfiguredForRealExecution,
   isAgentReadyWithFallback,
-  readGlobalDefaultAgentModel,
   recommendDeveloperRoleForStack,
   recommendProjectStackLabel,
   formatAgentRoleLabel,
   type Project,
   type CreateProjectInput,
   type Agent,
+  type AiProviderConfig,
   type OpenCodeCatalogResult,
 } from "@fluxora/shared";
 
@@ -23,6 +24,7 @@ export function ProjectsPage() {
   const [pathWarning, setPathWarning] = useState<string | null>(null);
   const [isSelectingDir, setIsSelectingDir] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [providers, setProviders] = useState<AiProviderConfig[]>([]);
   const [catalog, setCatalog] = useState<OpenCodeCatalogResult | null>(null);
 
   useEffect(() => {
@@ -35,15 +37,17 @@ export function ProjectsPage() {
   }
 
   async function loadAgentsAndProviders() {
-    const [agentList, catalogResult] = await Promise.all([
+    const [agentList, providerList, catalogResult] = await Promise.all([
       window.fluxora.agents.list(),
+      window.fluxora.providers.list(),
       window.fluxora.opencode.getCatalog(),
     ]);
     setAgents(agentList);
+    setProviders(providerList);
     setCatalog(catalogResult);
   }
 
-  const globalDefault = useMemo(() => readGlobalDefaultAgentModel(window.localStorage), []);
+  const globalDefault = useMemo(() => deriveProviderEngineGlobalDefault(providers), [providers]);
 
   function projectReadiness(project: Project) {
     const role = recommendDeveloperRoleForStack(project.stack);

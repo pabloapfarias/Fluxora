@@ -280,6 +280,22 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   sem execução de comandos, sem Git write operations,
   sem OpenCode como motor. UI preservada — nenhum
   componente React alterado.
+- [PR 012.1 — Corrigir integração de providers reais na UI](./STATUS_MIGRATION_TAURI_PR_012_1_PROVIDER_UI_FIX.md)
+  Corrige o descompasso entre a UI legada e o backend real:
+  `SettingsPage` passa a listar/configurar/testar providers
+  reais via `window.fluxora.providers.*`, `AgentsPage`
+  passa a refletir os agentes reais do Agent Engine
+  (`Planner`, `Developer`, `QA`, `Finalizer`), o fallback
+  global exibido na UI passa a seguir a resolução real do
+  Mission Engine, e o `desktopBridge` deixa de mascarar a
+  ausência de provider real com o mock legado do OpenCode em
+  runtime Tauri. Também melhora o erro de missão ausente com
+  `provider/missing` + `mission/failed` seguro
+  (`reason: "no-real-provider"`). Validações: `pnpm typecheck`,
+  `pnpm build`, `cargo check`, `cargo test --lib` passando;
+  `pnpm dev` bloqueado por porta 1420 em uso; 6 falhas
+  preexistentes em `pnpm test` (tema/voz) mantidas sem
+  correção nesta PR.
 
 ## Convenções aplicadas em todas as PRs
 

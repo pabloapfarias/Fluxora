@@ -508,6 +508,30 @@ fn emit_mission_event(
     events::emit_to_app(app, event);
 }
 
+fn emit_provider_missing_event(
+    app: &AppHandle,
+    mission_id: &str,
+    project_id: Option<&str>,
+) {
+    let event = events::build_event(
+        "provider/missing",
+        "mission",
+        "error",
+        Some(
+            "Nenhum provider real do Provider Engine está configurado para executar a missão."
+                .to_string(),
+        ),
+        project_id.map(|value| value.to_string()),
+        Some(mission_id.to_string()),
+        None,
+        Some(serde_json::json!({
+            "reason": "no-real-provider",
+            "legacyCatalogVisible": true,
+        })),
+    );
+    events::emit_to_app(app, event);
+}
+
 fn default_phase_message(phase: &str) -> &'static str {
     match phase {
         "created" => "Missão criada.",
@@ -1154,7 +1178,8 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
     let provider = match resolve_provider(&provider_state, mission.provider_id.as_deref()) {
         Some(p) => p,
         None => {
-            let err = "Nenhum provider configurado. Cadastre um provider antes de executar missões.".to_string();
+            let err = "Nenhum provider real do Provider Engine está configurado. O catálogo legado do OpenCode não é usado pelo Mission Engine. Cadastre um provider em Providers usando baseUrl, apiKeyEnv e defaultModel.".to_string();
+            emit_provider_missing_event(&app, &mission.id, Some(&mission.project_id));
             fail_mission(&app, &state, &mission, &err, Some(&job_id));
             return Err(err);
         }
@@ -1434,6 +1459,7 @@ fn fail_mission(
     job_id: Option<&str>,
 ) {
     let truncated = truncate_error(error);
+    let no_real_provider = error.contains("Nenhum provider real do Provider Engine está configurado");
     let updated = update_mission(state, &mission.id, |m| {
         m.status = "failed".to_string();
         m.error = Some(truncated.clone());
@@ -1462,6 +1488,8 @@ fn fail_mission(
         Some("failed"),
         Some(serde_json::json!({
             "errorMessage": truncated,
+            "reason": if no_real_provider { "no-real-provider" } else { "mission-failed" },
+            "legacyCatalogVisible": no_real_provider,
         })),
     );
     mark_job_failed(app, job_id, error);

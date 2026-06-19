@@ -131,9 +131,9 @@ export interface UpdateAgentInput {
   enabled?: boolean;
 }
 
-// === OpenCode catalog types (PR 009) ===
-// The OpenCode CLI is the single source of truth for providers and models.
-// The Fluxora UI reflects exactly what the CLI exposes — no hardcoded catalog.
+// === Legacy OpenCode catalog types ===
+// Mantidos por compatibilidade. No runtime Tauri atual, a fonte de verdade
+// para execução real é o Provider Engine próprio (`providers.*`).
 
 /** Provider retornado por `opencode providers list`. */
 export interface OpenCodeProvider {
@@ -315,6 +315,24 @@ export interface GlobalDefaultAgentModel {
   providerId: string | null;
   modelName: string | null;
   updatedAt?: string;
+}
+
+export function deriveProviderEngineGlobalDefault(
+  providers: Array<Pick<AiProviderConfig, "id" | "defaultModel" | "enabled">>
+): GlobalDefaultAgentModel {
+  const fallback = providers.find(
+    (provider) =>
+      provider.enabled &&
+      typeof provider.defaultModel === "string" &&
+      provider.defaultModel.trim().length > 0
+  );
+  if (!fallback) {
+    return { providerId: null, modelName: null };
+  }
+  return {
+    providerId: fallback.id,
+    modelName: fallback.defaultModel!.trim(),
+  };
 }
 
 export const GLOBAL_DEFAULT_AGENT_MODEL_KEY = "fluxora:globalDefaultAgentModel";
@@ -557,7 +575,7 @@ export function buildMissionPrecheck(input: MissionPrecheckInput): MissionPreche
   const blockingReasons: string[] = [];
 
   if (!hasEnabledProvider) {
-    blockingReasons.push("Nenhum provider disponível no OpenCode. Configure credenciais via `opencode providers`.");
+    blockingReasons.push("Nenhum provider real disponível no Provider Engine.");
   }
 
   for (const req of requirements) {
@@ -605,8 +623,8 @@ export function isAgentConfiguredForRealExecution(
   if (!agent.modelName || !agent.modelName.trim()) return false;
   // Sem catálogo carregado, aceitamos o que está salvo (não bloqueamos a UI).
   if (!catalog) return true;
-  // O catálogo é a fonte da verdade: o provider precisa existir e o modelo
-  // precisa estar disponível nesse provider.
+  // A lista atual de providers/modelos é a fonte de verdade para prontidão:
+  // o provider precisa existir e o modelo precisa estar disponível.
   const providerExists = catalog.providers.some((p) => p.id === agent.modelProviderId);
   if (!providerExists) return false;
   const modelExists = catalog.models.some((m) => m.id === agent.modelName);
@@ -636,12 +654,12 @@ export function getAgentReadiness(
       reasons.push("Sem provider próprio. Usará o provider/modelo global padrão.");
     } else {
       reasons.push("Nenhum provider selecionado.");
-      reasons.push("Defina um provider/modelo global padrão nas Configurações.");
+      reasons.push("Nenhum fallback real do Mission Engine está disponível.");
     }
   } else {
     const providerExists = !catalog || catalog.providers.some((p) => p.id === agent.modelProviderId);
     if (!providerExists) {
-      reasons.push("Provider selecionado não está disponível no OpenCode atual.");
+      reasons.push("Provider selecionado não está disponível no Provider Engine atual.");
     }
   }
   if (!agent.modelName || !agent.modelName.trim()) {
@@ -653,7 +671,7 @@ export function getAgentReadiness(
   } else if (catalog) {
     const modelExists = catalog.models.some((m) => m.id === agent.modelName);
     if (!modelExists) {
-      reasons.push("Modelo selecionado não está disponível no OpenCode atual.");
+      reasons.push("Modelo selecionado não está disponível no Provider Engine atual.");
     }
   }
   const blocking = !agent.enabled || (!fallback && (!agent.modelProviderId || !agent.modelName?.trim()));

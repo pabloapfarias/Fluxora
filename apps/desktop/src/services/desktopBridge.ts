@@ -1284,6 +1284,33 @@ async function listAgentConfigsTauri(): Promise<AgentConfig[]> {
   }
 }
 
+function toLegacyAgentFromConfig(agent: AgentConfig): Agent {
+  let role: Agent["role"] = "planner";
+  if (agent.role === "developer") {
+    role = "backend-dev";
+  } else if (agent.role === "qa") {
+    role = "qa";
+  } else if (agent.role === "finalizer") {
+    role = "custom:finalizer";
+  } else if (agent.role === "custom") {
+    role = "custom:agent";
+  }
+  return {
+    id: agent.id,
+    name: agent.name,
+    role,
+    description: agent.description || "",
+    canEditFiles: agent.role === "developer",
+    canRunCommands: agent.role === "developer" || agent.role === "qa",
+    requiresApproval: agent.role === "developer" || agent.role === "finalizer",
+    modelProviderId: agent.providerId,
+    modelName: agent.model,
+    enabled: agent.status === "enabled",
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt,
+  };
+}
+
 async function getAgentConfigTauri(id: string): Promise<AgentConfig | null> {
   if (!isTauriRuntime()) return null;
   try {
@@ -2328,12 +2355,12 @@ export function createDesktopBridge(): FluxoraAPI {
       },
     },
     opencode: {
-      // PR 007 — Provider Engine próprio. Em runtime Tauri,
-      // quando há providers cadastrados no Provider Engine,
-      // o catálogo passa a ser derivado de lá. A UI continua
-      // consumindo `window.fluxora.opencode.getCatalog` etc.
-      // exatamente como antes. Fora do runtime Tauri, o mock
-      // legado (OpenCode CLI simulado) é preservado.
+      // Legado OpenCode. Em runtime Tauri, o catálogo exposto
+      // aqui reflete apenas os providers reais do Provider
+      // Engine. Quando não há provider real, devolvemos
+      // catálogo vazio e não caímos no mock legado para evitar
+      // falso positivo de prontidão. Fora do runtime Tauri, o
+      // mock legado continua existindo para o modo browser.
       detect: mock.opencode.detect.bind(mock.opencode),
       getSettings: mock.opencode.getSettings.bind(mock.opencode),
       updateSettings: mock.opencode.updateSettings.bind(mock.opencode),
@@ -2343,15 +2370,19 @@ export function createDesktopBridge(): FluxoraAPI {
       async getCatalog(): Promise<OpenCodeCatalogResult> {
         if (isTauriRuntime()) {
           try {
-            const catalog = await buildCatalogFromProviders();
-            if (catalog.providers.length > 0) {
-              return catalog;
-            }
+            return await buildCatalogFromProviders();
           } catch (error) {
             console.warn(
-              "[desktopBridge] buildCatalogFromProviders falhou, usando mock",
+              "[desktopBridge] buildCatalogFromProviders falhou, usando catálogo vazio",
               error
             );
+            return {
+              providers: [],
+              models: [],
+              modelsByProvider: {},
+              fetchedAt: new Date().toISOString(),
+              error: "Falha ao consultar providers reais do Provider Engine.",
+            };
           }
         }
         return mock.opencode.getCatalog();
@@ -2360,14 +2391,13 @@ export function createDesktopBridge(): FluxoraAPI {
         if (isTauriRuntime()) {
           try {
             const catalog = await buildCatalogFromProviders();
-            if (catalog.providers.length > 0) {
-              return catalog.modelsByProvider[providerId] || [];
-            }
+            return catalog.modelsByProvider[providerId] || [];
           } catch (error) {
             console.warn(
-              "[desktopBridge] getModelsForProvider falhou, usando mock",
+              "[desktopBridge] getModelsForProvider falhou, usando []",
               error
             );
+            return [];
           }
         }
         return mock.opencode.getModelsForProvider(providerId);
@@ -2628,7 +2658,10 @@ export function createDesktopBridge(): FluxoraAPI {
     agents: {
       // Métodos legados preservados para a UI atual
       // (AgentsPage.tsx consome `agents.list/create/update/remove`).
-      list(): Promise<Agent[]> {
+      async list(): Promise<Agent[]> {
+        if (isTauriRuntime()) {
+          return (await listAgentConfigsTauri()).map(toLegacyAgentFromConfig);
+        }
         return mock.agents.list();
       },
       create(input) {

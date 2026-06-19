@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Sparkles, X } from "lucide-react";
-import { readGlobalDefaultAgentModel, type GlobalDefaultAgentModel } from "@fluxora/shared";
+import { deriveProviderEngineGlobalDefault, type GlobalDefaultAgentModel } from "@fluxora/shared";
 
 const DISMISS_KEY = "fluxora:globalDefaultBanner:dismissedAt";
 const DISMISS_HOURS = 12;
@@ -10,7 +10,17 @@ export function GlobalDefaultBanner() {
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    setValue(readGlobalDefaultAgentModel(window.localStorage));
+    let mounted = true;
+    void window.fluxora.providers
+      .list()
+      .then((providers) => {
+        if (!mounted) return;
+        setValue(deriveProviderEngineGlobalDefault(providers));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setValue({ providerId: null, modelName: null });
+      });
     try {
       const last = window.localStorage.getItem(DISMISS_KEY);
       if (last) {
@@ -22,6 +32,9 @@ export function GlobalDefaultBanner() {
     } catch {
       // ignore storage errors
     }
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   if (!value || !value.providerId || !value.modelName) return null;
@@ -35,8 +48,8 @@ export function GlobalDefaultBanner() {
     >
       <Sparkles size={12} className="text-accent flex-shrink-0" />
       <span>
-        <span className="text-text-primary font-medium">Modelo padrão global ativo.</span>
-        {" "}Agentes sem provider/modelo próprios usarão <span className="font-mono text-text-primary">{value.modelName}</span>.
+        <span className="text-text-primary font-medium">Fallback real do Mission Engine ativo.</span>
+        {" "}Missões e agentes sem sobrescrita usarão <span className="font-mono text-text-primary">{value.modelName}</span>.
       </span>
       <button
         type="button"

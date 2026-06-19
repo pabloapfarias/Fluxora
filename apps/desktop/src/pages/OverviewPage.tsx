@@ -14,6 +14,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import type {
+  AiProviderConfig,
   Project,
   WorkflowRun,
   Agent,
@@ -27,11 +28,11 @@ import {
    appendProjectRecommendationHistory,
    buildMissionPrecheck,
    classifyMissionIntent,
+   deriveProviderEngineGlobalDefault,
    getMissionAgentRequirements,
    getRequiredAgentRolesForMission,
    isAgentConfiguredForRealExecution,
    isAgentReadyWithFallback,
-   readGlobalDefaultAgentModel,
    readProjectRecommendationHistory,
    readProjectRecommendations,
    recordProjectRecommendation,
@@ -74,6 +75,7 @@ export function OverviewPage() {
   const [recentRuns, setRecentRuns] = useState<WorkflowRun[]>([]);
   const [allApprovals, setAllApprovals] = useState<Approval[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [providers, setProviders] = useState<AiProviderConfig[]>([]);
   const [catalog, setCatalog] = useState<OpenCodeCatalogResult | null>(null);
   const [pendingFinalApproval, setPendingFinalApproval] = useState<Approval | null>(null);
   const [executionMode, setExecutionMode] = useState<OverviewExecutionMode>(() => {
@@ -176,10 +178,11 @@ export function OverviewPage() {
 
   async function loadData(explicitProjectId?: string | null) {
     const loadGeneration = ++loadGenerationRef.current;
-    const [p, r, ag, catalogResult, approvals, jobs] = await Promise.all([
+    const [p, r, ag, providerList, catalogResult, approvals, jobs] = await Promise.all([
       window.fluxora.projects.list(),
       window.fluxora.workflows.list(),
       window.fluxora.agents.list(),
+      window.fluxora.providers.list(),
       window.fluxora.opencode.getCatalog(),
       window.fluxora.approvals.list(),
       window.fluxora.workflows.listJobs(),
@@ -191,6 +194,7 @@ export function OverviewPage() {
 
     setProjects(p);
     setAgents(ag.filter((a: Agent) => a.enabled));
+    setProviders(providerList);
     setCatalog(catalogResult);
 
     // Use explicit projectId if provided, otherwise fall back to ref (always up-to-date)
@@ -288,21 +292,21 @@ export function OverviewPage() {
   }, [activeProject, validationResult]);
 
   const globalDefault = useMemo(
-    () => readGlobalDefaultAgentModel(window.localStorage),
-    []
+    () => deriveProviderEngineGlobalDefault(providers),
+    [providers]
   );
 
   const realExecutionBlocker = useMemo(() => {
-    const hasEnabledProvider = catalog ? catalog.providers.length > 0 : agents.some((a) => Boolean(a.modelProviderId));
+    const hasEnabledProvider = providers.some((provider) => provider.enabled);
     const hasGlobalFallback = Boolean(globalDefault.providerId && globalDefault.modelName);
     const isAnyAgentReady = agents.some((agent) => isAgentReadyWithFallback(agent, catalog, globalDefault));
 
     if (executionMode === "real") {
       if (!hasEnabledProvider && !hasGlobalFallback) {
-        return "Modo real indisponível: configure credenciais no OpenCode via `opencode providers` ou defina um modelo padrão global.";
+        return "Modo real indisponível: configure um provider real no Provider Engine.";
       }
       if (!isAnyAgentReady) {
-        return "Modo real indisponível: habilite ao menos um agente com provider/modelo configurados (ou use o modelo padrão global).";
+        return "Modo real indisponível: habilite ao menos um agente real com provider/modelo ou use o fallback real do Mission Engine.";
       }
       return undefined;
     }
@@ -310,7 +314,7 @@ export function OverviewPage() {
     if (executionMode !== "multi_agent") return undefined;
 
     if (!hasEnabledProvider && !hasGlobalFallback) {
-      return "Modo multiagente indisponível: ative ao menos um provider em Configurações ou defina um modelo padrão global.";
+      return "Modo multiagente indisponível: ative ao menos um provider real em Configurações.";
     }
 
     const labels: Record<string, string> = {
@@ -336,8 +340,8 @@ export function OverviewPage() {
     if (!hasDeveloperReady) missing.push("backend-dev");
 
     if (missing.length === 0) return undefined;
-    return `Modo multiagente indisponível: habilite modelo/provider para ${missing.map((role) => labels[role] || role).join(", ")} (ou use o modelo padrão global).`;
-  }, [executionMode, agents, catalog, globalDefault]);
+    return `Modo multiagente indisponível: habilite modelo/provider para ${missing.map((role) => labels[role] || role).join(", ")} (ou use o fallback real do Mission Engine).`;
+  }, [executionMode, agents, catalog, globalDefault, providers]);
 
   const projectValid = !projectBlocker && !realExecutionBlocker;
   const commandBlocker = projectBlocker || realExecutionBlocker;
@@ -734,6 +738,7 @@ export function OverviewPage() {
         isValidating={isValidating}
         validationResult={validationResult}
         agents={agents}
+        providers={providers}
         catalog={catalog}
       />
 
@@ -879,7 +884,7 @@ export function OverviewPage() {
           suggestedAgents={diagnosticContext.suggestedAgents}
           agents={agents}
           catalog={catalog}
-          hasEnabledProvider={Boolean(catalog?.providers.length) || Boolean(globalDefault.providerId && globalDefault.modelName)}
+          hasEnabledProvider={providers.some((provider) => provider.enabled) || Boolean(globalDefault.providerId && globalDefault.modelName)}
           activeProjectStack={activeProject?.stack}
           savedRecommendation={savedRecommendation}
           recommendationHistory={recommendationHistory}
