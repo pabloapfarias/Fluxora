@@ -16,7 +16,7 @@ function makeApproval(overrides: Partial<Approval> = {}): Approval {
       "",
       "Resumo: +35/-2 linhas em 2 arquivo(s)",
       "Impacto: Médio",
-      "Agente: OpenCode CLI (modo real)",
+      "Agente: Fluxora Agent Engine (modo real)",
     ].join("\n"),
     impact: "medium",
     status: "pending",
@@ -52,7 +52,7 @@ describe("validateApprovalContext", () => {
   it("extrai generatedBy da descrição", () => {
     const approval = makeApproval();
     const ctx = validateApprovalContext(approval);
-    expect(ctx.generatedBy).toBe("OpenCode CLI (modo real)");
+    expect(ctx.generatedBy).toBe("Fluxora Agent Engine (modo real)");
   });
 
   it("extrai changedFiles da descrição", () => {

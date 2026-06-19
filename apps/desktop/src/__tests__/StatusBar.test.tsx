@@ -151,10 +151,9 @@ describe("StatusBar — fallback when Git unavailable", () => {
     expect(html).toContain("Desenvolvimento");
   });
 
-  it("StatusBar shows OpenCode status labels", () => {
+  it("StatusBar shows provider status labels", () => {
     const html = renderToStaticMarkup(<StatusBar />);
-    // Initial opencodeStatus is "not_detected" → "Não detectado"
-    expect(html).toContain("Não detectado");
-    expect(html).toContain("OpenCode:");
+    expect(html).toContain("Providers:");
+    expect(html).toContain("0");
   });
 });

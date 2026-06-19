@@ -63,108 +63,54 @@ describe("useLiveExecutionEvents — workflow events", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. opencode:stdout appears in events
+// 2. generic stream subscription
 // ---------------------------------------------------------------------------
 
-describe("useLiveExecutionEvents — opencode stdout", () => {
-  it("stdout listener registration returns an unsubscribe function", async () => {
-    const api = createMockAPI();
-    const chunks: string[] = [];
-
-    const unsub = api.events.onOpenCodeStdout((payload) => {
-      chunks.push(payload.chunk);
-    });
-
-    // The listener registration must return a cleanup function
-    expect(typeof unsub).toBe("function");
-    unsub();
-  });
-
-  it("workflow events include opencode.stdout type when a real workflow is created", async () => {
-    const api = createMockAPI();
-    const allEvents: WorkflowEvent[] = [];
-
-    // Listen to workflow events
-    const unsub = api.events.onWorkflowEvent((event) => {
-      allEvents.push(event);
-    });
-
-    // Creating a workflow emits a "workflow.created" event
-    const projects = await api.projects.list();
-    await api.workflows.create({
-      title: "Real workflow",
-      prompt: "implement feature",
-      generatedContext: "{}",
-      projectId: projects[0].id,
-      executionMode: "real",
-      steps: [{ name: "Dev", type: "developer" }],
-    });
-
-    // Verify the listener received events
-    expect(allEvents.length).toBeGreaterThan(0);
-    // The "workflow.created" event should be present
-    expect(allEvents.some((e) => e.type === "workflow.created")).toBe(true);
-
-    // The mock API's simulateRealWorkflow emits "opencode.stdout" events
-    // but this happens asynchronously via void + setTimeout, which is
-    // an integration concern. We verify the event type is recognized.
-    const stdoutEvent: WorkflowEvent = {
-      id: "test-stdout",
-      workflowRunId: "wf-1",
-      type: "opencode.stdout",
-      message: "STDOUT: test output",
-      createdAt: new Date().toISOString(),
-    };
-    expect(stdoutEvent.type).toBe("opencode.stdout");
-
-    unsub();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 3. opencode:stderr appears in events
-// ---------------------------------------------------------------------------
-
-describe("useLiveExecutionEvents — opencode stderr", () => {
-  it("stderr listener is registered and can be unsubscribed", async () => {
-    const api = createMockAPI();
-    const received: string[] = [];
-
-    const unsub = api.events.onOpenCodeStderr((payload) => {
-      received.push(payload.chunk);
-    });
-
-    expect(typeof unsub).toBe("function");
-    unsub();
-    // After unsubscribe, no more events should arrive
-    // (we can't easily trigger stderr in the mock, but we verify the API contract)
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 4. opencode:json-event appears in events
-// ---------------------------------------------------------------------------
-
-describe("useLiveExecutionEvents — opencode json-event", () => {
-  it("json-event listener is registered and can be unsubscribed", async () => {
+describe("useLiveExecutionEvents — generic stream subscription", () => {
+  it("subscribe listener registration returns an unsubscribe function", async () => {
     const api = createMockAPI();
     const received: unknown[] = [];
 
-    const unsub = api.events.onOpenCodeJsonEvent((payload) => {
-      received.push(payload);
+    const unsub = api.events.subscribe((event) => {
+      received.push(event);
     });
 
     expect(typeof unsub).toBe("function");
     unsub();
   });
 
-  it("extracts text responses from json events with type=text", () => {
-    // Simulate the hook's json-event handler logic
-    const evt = { type: "text", text: "Arquivo criado com sucesso" };
+  it("generic event subscribers receive provider stream events", async () => {
+    const api = createMockAPI();
+    const allEvents: import("@fluxora/shared").FluxoraEvent[] = [];
+
+    const unsub = api.events.subscribe((event) => {
+      allEvents.push(event);
+    });
+
+    await api.events.emitDiagnostic({
+      message: "STDOUT: test output",
+      missionId: "wf-1",
+      payload: { workflowRunId: "wf-1", delta: "STDOUT: test output" },
+    });
+
+    expect(allEvents.length).toBeGreaterThan(0);
+    expect(allEvents.some((e) => e.type === "app/diagnostic")).toBe(true);
+
+    unsub();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. stream chunk extraction
+// ---------------------------------------------------------------------------
+
+describe("useLiveExecutionEvents — stream chunk extraction", () => {
+  it("extracts text responses from provider stream chunk events", () => {
+    const evt = { type: "provider/stream-chunk", payload: { delta: "Arquivo criado com sucesso" } };
     const responses: { id: string; text: string }[] = [];
 
-    if (evt && typeof evt === "object" && evt.type === "text" && typeof evt.text === "string") {
-      const text = evt.text.trim();
+    if (evt && typeof evt === "object" && evt.type === "provider/stream-chunk" && typeof evt.payload?.delta === "string") {
+      const text = evt.payload.delta.trim();
       if (text) {
         responses.push({ id: "oc-resp-1", text });
       }
@@ -174,12 +120,12 @@ describe("useLiveExecutionEvents — opencode json-event", () => {
     expect(responses[0].text).toBe("Arquivo criado com sucesso");
   });
 
-  it("ignores json events without type=text", () => {
-    const evt = { type: "tool_use", name: "read_file" };
+  it("ignores stream events without textual delta", () => {
+    const evt = { type: "provider/stream-chunk", payload: { tool: "read_file" } };
     const responses: { id: string; text: string }[] = [];
 
-    if (evt && typeof evt === "object" && (evt as any).type === "text" && typeof (evt as any).text === "string") {
-      responses.push({ id: "oc-resp-1", text: (evt as any).text });
+    if (evt && typeof evt === "object" && (evt as any).type === "provider/stream-chunk" && typeof (evt as any).payload?.delta === "string") {
+      responses.push({ id: "oc-resp-1", text: (evt as any).payload.delta });
     }
 
     expect(responses).toHaveLength(0);
@@ -247,15 +193,14 @@ describe("useLiveExecutionEvents — listener cleanup", () => {
     expect(received.length).toBe(countBefore);
   });
 
-  it("all five listener types return unsubscribe functions", async () => {
+  it("all four active listener types return unsubscribe functions", async () => {
     const api = createMockAPI();
 
     const unsubs = [
       api.events.onWorkflowEvent(() => {}),
       api.events.onJobUpdated(() => {}),
-      api.events.onOpenCodeStdout(() => {}),
-      api.events.onOpenCodeStderr(() => {}),
-      api.events.onOpenCodeJsonEvent(() => {}),
+      api.events.onApprovalChange(() => {}),
+      api.events.subscribe(() => {}),
     ];
 
     for (const unsub of unsubs) {
@@ -331,16 +276,14 @@ describe("useLiveExecutionEvents — onApprovalChange listener", () => {
     expect(received.length).toBe(countBefore);
   });
 
-  it("all six listener types return unsubscribe functions", async () => {
+  it("all four active listener types return unsubscribe functions", async () => {
     const api = createMockAPI();
 
     const unsubs = [
       api.events.onWorkflowEvent(() => {}),
       api.events.onJobUpdated(() => {}),
       api.events.onApprovalChange(() => {}),
-      api.events.onOpenCodeStdout(() => {}),
-      api.events.onOpenCodeStderr(() => {}),
-      api.events.onOpenCodeJsonEvent(() => {}),
+      api.events.subscribe(() => {}),
     ];
 
     for (const unsub of unsubs) {

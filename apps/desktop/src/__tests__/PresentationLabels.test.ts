@@ -107,9 +107,9 @@ describe('PresentationLabels — formatEventType', () => {
       'controlled_execution.sandbox_ready': 'Sandbox pronto',
       'controlled_execution.before_git_status_captured':
         'Status git pré-execução capturado',
-      'controlled_execution.opencode_started': 'OpenCode iniciado',
-      'controlled_execution.opencode_json_event': 'Evento JSON do OpenCode',
-      'controlled_execution.opencode_completed': 'OpenCode concluído',
+      'controlled_execution.opencode_started': 'Runner iniciado',
+      'controlled_execution.opencode_json_event': 'Evento do runner',
+      'controlled_execution.opencode_completed': 'Runner concluído',
       'controlled_execution.after_git_status_captured':
         'Status git pós-execução capturado',
       'controlled_execution.changed_files_detected':

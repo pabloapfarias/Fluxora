@@ -3,10 +3,12 @@ import type {
   Project,
   WorkflowRun,
   Agent,
+  AgentConfig,
   OpenCodeCatalogResult,
   AgentStepOutput,
 } from "@fluxora/shared";
 import { isAgentConfiguredForRealExecution } from "@fluxora/shared";
+import { loadProviderCatalog } from "../lib/providerCatalog";
 
 // ── Token estimation constants ──────────────────────────────────────────────
 const CHARS_PER_TOKEN = 3.5;
@@ -222,16 +224,17 @@ export function useUsageStats(filters: UsageFilters) {
   const loadData = useCallback(async () => {
     const gen = ++loadGenRef.current;
     try {
-      const [p, r, a, c] = await Promise.all([
+      const [p, r, a, providers] = await Promise.all([
         window.fluxora.projects.list(),
         window.fluxora.workflows.list(),
-        window.fluxora.agents.list(),
-        window.fluxora.opencode.getCatalog().catch(() => null),
+        window.fluxora.agents.listConfigs(),
+        window.fluxora.providers.list(),
       ]);
+      const c = await loadProviderCatalog(providers).catch(() => null);
       if (gen !== loadGenRef.current) return;
       setProjects(p);
       setAllRuns(r);
-      setAgents(a);
+      setAgents(a.map(toLegacyAgent));
       setCatalog(c);
 
       // Fetch step outputs for all runs (batch)
@@ -456,6 +459,32 @@ export function useUsageStats(filters: UsageFilters) {
   }, [allRuns, projects, agents, catalog, stepOutputsMap, filters]);
 
   return { stats, projects, reload: loadData };
+}
+
+function toLegacyAgent(agent: AgentConfig): Agent {
+  const role =
+    agent.role === "developer"
+      ? "backend-dev"
+      : agent.role === "finalizer"
+        ? "custom:finalizer"
+        : agent.role === "custom"
+          ? "custom:agent"
+          : agent.role;
+
+  return {
+    id: agent.id,
+    name: agent.name,
+    role,
+    description: agent.description || "",
+    canEditFiles: agent.role === "developer",
+    canRunCommands: false,
+    requiresApproval: false,
+    modelProviderId: agent.providerId,
+    modelName: agent.model,
+    enabled: agent.status === "enabled",
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt,
+  };
 }
 
 function aggregateMonthly(runs: WorkflowRun[]): MonthlyUsage[] {

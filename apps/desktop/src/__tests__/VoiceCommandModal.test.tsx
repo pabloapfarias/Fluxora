@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Topbar } from "../components/layout/Topbar";
-import type { AudioProviderSettings, VoiceContextResult } from "@fluxora/shared";
+import type { AudioProviderSettings } from "@fluxora/shared";
 
 const mockNavigate = vi.fn();
 
@@ -15,7 +15,6 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-// Mock useMicCapture para evitar dependência de getUserMedia em jsdom.
 let mockMicState: "idle" | "requesting" | "recording" | "error" = "idle";
 vi.mock("../hooks/useMicCapture", () => ({
   useMicCapture: () => ({
@@ -38,32 +37,22 @@ vi.mock("../hooks/useMicCapture", () => ({
   }),
 }));
 
-vi.mock("../contexts/ActiveProjectContext", () => ({
-  useActiveProject: () => ({ activeProjectId: "proj-adv", setActiveProjectId: () => {} }),
-}));
-
-const SAMPLE_CONTEXT: VoiceContextResult = {
-  intent: "feature_request",
-  title: "Criar cupom de primeira compra",
-  summary: "Implementar cupom de primeira compra no eBig Food.",
-  suggestedProjects: ["eBig Food API"],
-  suggestedAgents: ["backend-dev", "qa"],
-  risk: "medium",
-  requiresApproval: true,
+const baseFluxoraMock = {
+  projects: {
+    list: vi.fn().mockResolvedValue([
+      { id: "proj-adv", name: "Escritorio Advocacia", path: "/adv", stack: [], status: "idle", createdAt: "", updatedAt: "" },
+    ]),
+  },
+  voice: {
+    transcribe: vi.fn().mockResolvedValue({ text: "" }),
+    saveAudioBytes: vi.fn().mockResolvedValue({ audioPath: "/tmp/audio.webm" }),
+    createFromTranscript: vi.fn(),
+  },
 };
 
 function setAudioProviderMock(provider: AudioProviderSettings | null) {
   (window as any).fluxora = {
-    projects: {
-      list: vi.fn().mockResolvedValue([
-        { id: "proj-adv", name: "Escritório Advocacia", path: "/adv", stack: [], status: "idle", createdAt: "", updatedAt: "" },
-      ]),
-    },
-    voice: {
-      transcribe: vi.fn().mockResolvedValue({ text: "" }),
-      saveAudioBytes: vi.fn().mockResolvedValue({ audioPath: "/tmp/audio.webm" }),
-      createFromTranscript: vi.fn().mockResolvedValue(SAMPLE_CONTEXT),
-    },
+    ...baseFluxoraMock,
     settings: {
       getAudioProvider: vi.fn().mockResolvedValue(provider),
     },
@@ -81,7 +70,7 @@ afterEach(() => {
 });
 
 describe("Topbar — comando por voz", () => {
-  it("abre o modal ao clicar no mic e mostra o painel de transcrição", async () => {
+  it("renderiza o comando por voz inline no topo", async () => {
     setAudioProviderMock({ type: "whisper_local_managed", language: "pt-BR", model: "base" });
     render(
       <MemoryRouter>
@@ -90,45 +79,14 @@ describe("Topbar — comando por voz", () => {
     );
 
     const micButton = await screen.findByTestId("topbar-mic-button");
-    fireEvent.click(micButton);
+    const commandInput = await screen.findByTestId("topbar-command-input");
 
-    // O modal "Comando por Voz" deve aparecer
-    await waitFor(() => {
-      expect(screen.getByText(/Comando por Voz/i)).toBeTruthy();
-    });
-
-    // E o painel mostra o select de idioma e botão Gravar
-    await waitFor(() => {
-      expect(screen.getByTestId("record-button")).toBeTruthy();
-    });
+    expect(micButton).toBeTruthy();
+    expect(commandInput).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Fale com o Orquestrador/i)).toBeTruthy();
   });
 
-  it("fecha o modal ao clicar no X", async () => {
-    setAudioProviderMock({ type: "whisper_local_managed", language: "pt-BR", model: "base" });
-    render(
-      <MemoryRouter>
-        <Topbar />
-      </MemoryRouter>,
-    );
-
-    const micButton = await screen.findByTestId("topbar-mic-button");
-    fireEvent.click(micButton);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Comando por Voz/i)).toBeTruthy();
-    });
-
-    // O modal é fechado clicando no backdrop (overlay)
-    const backdrop = document.querySelector(".fixed.inset-0");
-    expect(backdrop).toBeTruthy();
-    if (backdrop) fireEvent.click(backdrop);
-
-    await waitFor(() => {
-      expect(screen.queryByText(/Comando por Voz/i)).toBeNull();
-    });
-  });
-
-  it("envia a transcrição e navega para /overview preenchendo o comando principal", async () => {
+  it("envia o comando digitado e navega para /overview", async () => {
     setAudioProviderMock({ type: "whisper_local_managed", language: "pt-BR", model: "base" });
     render(
       <MemoryRouter initialEntries={["/shortcuts"]}>
@@ -136,22 +94,9 @@ describe("Topbar — comando por voz", () => {
       </MemoryRouter>,
     );
 
-    // Abre o modal
-    const micButton = await screen.findByTestId("topbar-mic-button");
-    fireEvent.click(micButton);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Comando por Voz/i)).toBeTruthy();
-    });
-
-    // O novo painel mostra o textarea e botão "Enviar"
-    const textarea = screen.getByTestId("transcript-textarea");
-    expect(textarea).toBeTruthy();
-    fireEvent.change(textarea, { target: { value: "Criar cupom" } });
-
-    // Envia
-    const submit = screen.getByTestId("submit-button");
-    fireEvent.click(submit);
+    const commandInput = await screen.findByTestId("topbar-command-input");
+    fireEvent.change(commandInput, { target: { value: "Criar cupom" } });
+    fireEvent.keyDown(commandInput, { key: "Enter", code: "Enter" });
 
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith("/overview", {
@@ -160,16 +105,9 @@ describe("Topbar — comando por voz", () => {
         },
       });
     });
-
-    expect((window as any).fluxora.voice.createFromTranscript).not.toHaveBeenCalled();
-
-    // O modal fecha (submit aciona onSubmit que chama onClose)
-    await waitFor(() => {
-      expect(screen.queryByText(/Comando por Voz/i)).toBeNull();
-    });
   });
 
-  it("mostra o mic com opacidade reduzida quando o provider é manual", async () => {
+  it("mantem o botao de microfone com opacidade reduzida quando o provider e manual", async () => {
     setAudioProviderMock({ type: "manual" });
     render(
       <MemoryRouter>
@@ -177,15 +115,23 @@ describe("Topbar — comando por voz", () => {
       </MemoryRouter>,
     );
 
-    // Aguarda as settings carregarem
     const micButton = await screen.findByTestId("topbar-mic-button");
     expect(micButton.className).toMatch(/opacity-60/);
-    expect(micButton.getAttribute("title")).toMatch(/desabilitado/i);
+  });
 
-    // Abre o modal
+  it("mostra erro ao tentar gravar sem provider de voz configurado", async () => {
+    setAudioProviderMock({ type: "manual" });
+    render(
+      <MemoryRouter>
+        <Topbar />
+      </MemoryRouter>,
+    );
+
+    const micButton = await screen.findByTestId("topbar-mic-button");
     fireEvent.click(micButton);
+
     await waitFor(() => {
-      expect(screen.getByText(/Comando por Voz/i)).toBeTruthy();
+      expect(screen.getByPlaceholderText(/Selecione Whisper local offline ou nuvem nas Configurações/i)).toBeTruthy();
     });
   });
 });

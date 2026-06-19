@@ -224,6 +224,7 @@ export function Topbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
             <div className="flex-1 min-w-0 flex flex-col justify-center pt-0.5">
               <div className="flex items-center gap-2">
                 <input
+                  data-testid="topbar-command-input"
                   type="text"
                   value={transcript}
                   onChange={(e) => setTranscript(e.target.value)}
@@ -265,6 +266,7 @@ export function Topbar({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
             </div>
 
             <button
+              data-testid="topbar-mic-button"
               onClick={handleStartStopRecording}
               disabled={isTranscribing}
               className={`flex-shrink-0 w-11 h-11 rounded-md flex items-center justify-center transition-colors ${

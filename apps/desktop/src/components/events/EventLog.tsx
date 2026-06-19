@@ -685,7 +685,7 @@ function buildTimelineItems(events: WorkflowEvent[]): TimelineItem[] {
       meta.agent ? `Agente: ${meta.agent}` : "Agente iniciado",
       meta.model ? `Modelo: ${meta.model}` : null,
       meta.timeoutMs && typeof meta.timeoutMs === "number" ? `Tempo limite: ${formatDurationMs(meta.timeoutMs)}` : null,
-      meta.engine ? `Motor: ${meta.engine}` : "Motor: OpenCode",
+      meta.engine ? `Motor: ${meta.engine}` : "Motor: Fluxora",
     ].filter(Boolean).join("\n");
     items.push({
       id: `timeline-agent-${started.id}`,
@@ -702,7 +702,7 @@ function buildTimelineItems(events: WorkflowEvent[]): TimelineItem[] {
     items.push({
       id: `timeline-work-${firstStream.id}`,
       createdAt: firstStream.createdAt,
-      category: "OPENCODE",
+      category: "STREAM",
       title: "Trabalhando no projeto",
       description: "O agente começou a analisar e alterar os arquivos necessários.",
       tone: "default",
@@ -754,7 +754,7 @@ function humanTimelineTitle(event: WorkflowEvent): string {
   if (isTimeoutEvent(event)) return "Tempo limite atingido";
   if (event.type.startsWith("approval")) return "Aprovação atualizada";
   if (event.type.startsWith("mission")) return "Missão atualizada";
-  if (event.type.startsWith("opencode")) return "OpenCode atualizado";
+  if (event.type.startsWith("opencode")) return "Stream atualizado";
   if (event.type.startsWith("git")) return "Arquivos analisados";
   if (event.type.includes("failed")) return "Execução falhou";
   if (event.type.includes("completed")) return "Etapa concluída";
@@ -812,7 +812,7 @@ function normalizeSource(type: string): string {
   if (type.startsWith("developer")) return "AGENTE";
   if (type.startsWith("qa")) return "QA";
   if (type.startsWith("fix")) return "AGENTE";
-  if (type.startsWith("opencode")) return "OPENCODE";
+  if (type.startsWith("opencode")) return "STREAM";
   if (type.startsWith("mission")) return "MISSÃO";
   if (type.startsWith("git")) return "GIT";
   if (type.startsWith("security")) return "SEGURANÇA";

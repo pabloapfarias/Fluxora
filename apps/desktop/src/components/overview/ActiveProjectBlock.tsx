@@ -47,7 +47,7 @@ export interface ActiveProjectBlockProps {
   agents?: Agent[];
   /** Providers reais do Provider Engine */
   providers?: AiProviderConfig[];
-  /** Catálogo do OpenCode (para prontidão) */
+  /** Catálogo derivado do Provider Engine (para prontidão) */
   catalog?: OpenCodeCatalogResult | null;
 }
 
@@ -67,7 +67,7 @@ export function ActiveProjectBlock({
   providers = [],
   catalog = null,
 }: ActiveProjectBlockProps) {
-  const isOpencodeDetected = opencodeStatus === "detected" || opencodeStatus === "running";
+  const isProviderRuntimeReady = opencodeStatus === "detected" || opencodeStatus === "running";
 
   const developerReadiness = project
     ? (() => {
@@ -195,16 +195,16 @@ export function ActiveProjectBlock({
           {gitAvailable === true ? "Git OK" : gitAvailable === false ? "Sem Git" : "Verificando Git..."}
         </span>
 
-        {/* OpenCode */}
+        {/* Provider Engine */}
         <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-md border ${
-          isOpencodeDetected
+          isProviderRuntimeReady
             ? "bg-success-soft text-success border-success/25"
             : opencodeStatus === "not_detected"
             ? "bg-warning-soft text-warning border-warning/30"
             : "bg-bg-input text-text-muted border-border-subtle"
         }`}>
           <Zap size={12} />
-          {isOpencodeDetected ? "OpenCode detectado" : opencodeStatus === "not_detected" ? "OpenCode não detectado" : "Verificando OpenCode..."}
+          {isProviderRuntimeReady ? "Provider Engine pronto" : opencodeStatus === "not_detected" ? "Sem provider configurado" : "Verificando providers..."}
         </span>
 
         {/* Branch */}

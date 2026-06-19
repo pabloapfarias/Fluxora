@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { Database, Zap, GitBranch, Clock, Layers, RefreshCcw } from "lucide-react";
-import type { BackgroundWorkflowJob, OpenCodeStatus, OpenCodeSettings } from "@fluxora/shared";
-import { formatExecutionStatus } from "../../lib/presentationLabels";
+import { Database, GitBranch, Clock, Layers, RefreshCcw, Cable } from "lucide-react";
+import type { BackgroundWorkflowJob } from "@fluxora/shared";
 
 function useLastUpdated() {
   const [now, setNow] = useState(Date.now());
@@ -21,27 +20,11 @@ function formatRelative(ts: number) {
   return `${h}h atrás`;
 }
 
-const opencodeLabels: Record<OpenCodeStatus, string> = {
-  not_configured: "Não configurado",
-  not_detected: "Não detectado",
-  detected: "Detectado",
-  running: "Executando",
-  error: "Erro",
-};
-
-const opencodeTone: Record<OpenCodeStatus, "default" | "warning" | "success" | "error" | "accent"> = {
-  not_configured: "default",
-  not_detected: "warning",
-  detected: "success",
-  running: "accent",
-  error: "error",
-};
-
 export function StatusBar() {
   const [projectCount, setProjectCount] = useState(0);
   const [agentCount, setAgentCount] = useState(0);
-  const [opencodeStatus, setOpencodeStatus] = useState<OpenCodeStatus>("not_detected");
-  const [opencodeSettings, setOpencodeSettings] = useState<OpenCodeSettings | null>(null);
+  const [providerCount, setProviderCount] = useState(0);
+  const [providersReady, setProvidersReady] = useState(false);
   const [activeJobs, setActiveJobs] = useState<BackgroundWorkflowJob[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [gitBranch, setGitBranch] = useState<string>("...");
@@ -49,18 +32,28 @@ export function StatusBar() {
   const [appVersion, setAppVersion] = useState<string>("...");
   const lastUpdate = useLastUpdated();
 
+  async function loadCounts() {
+    const [projects, agents, providers] = await Promise.all([
+      window.fluxora.projects.list(),
+      window.fluxora.agents.listConfigs(),
+      window.fluxora.providers.list(),
+    ]);
+    setProjectCount(projects.length);
+    setAgentCount(agents.filter((agent) => agent.status === "enabled").length);
+    setProviderCount(providers.length);
+    setProvidersReady(providers.some((provider) => provider.enabled));
+  }
+
   useEffect(() => {
     let mounted = true;
     const load = async () => {
-      const [p, a] = await Promise.all([
-        window.fluxora.projects.list(),
-        window.fluxora.agents.list(),
-      ]);
-      if (!mounted) return;
-      setProjectCount(p.length);
-      setAgentCount(a.filter((ag) => ag.enabled).length);
+      try {
+        await loadCounts();
+      } catch {
+        if (!mounted) return;
+      }
     };
-    load();
+    void load();
     const id = setInterval(load, 8000);
     return () => {
       mounted = false;
@@ -74,7 +67,7 @@ export function StatusBar() {
       const jobs = await window.fluxora.workflows.listJobs();
       if (mounted) setActiveJobs(jobs.filter((job) => ["queued", "running"].includes(job.status)));
     };
-    loadJobs();
+    void loadJobs();
     const unsubscribe = window.fluxora.events.onJobUpdated((job) => {
       setActiveJobs((current) => {
         const next = [...current.filter((entry) => entry.id !== job.id), job].filter((entry) => ["queued", "running"].includes(entry.status));
@@ -84,29 +77,6 @@ export function StatusBar() {
     return () => {
       mounted = false;
       unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    const load = async () => {
-      try {
-        const [s, settings] = await Promise.all([
-          window.fluxora.opencode.getStatus(),
-          window.fluxora.opencode.getSettings(),
-        ]);
-        if (!mounted) return;
-        setOpencodeStatus(s);
-        setOpencodeSettings(settings);
-      } catch {
-        if (mounted) setOpencodeStatus("error");
-      }
-    };
-    load();
-    const id = setInterval(load, 10000);
-    return () => {
-      mounted = false;
-      clearInterval(id);
     };
   }, []);
 
@@ -129,7 +99,7 @@ export function StatusBar() {
         }
       }
     };
-    load();
+    void load();
     const id = setInterval(load, 30000);
     return () => {
       mounted = false;
@@ -140,10 +110,7 @@ export function StatusBar() {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const det = await window.fluxora.opencode.detect();
-      setOpencodeStatus(det.status);
-      const settings = await window.fluxora.opencode.getSettings();
-      setOpencodeSettings(settings);
+      await loadCounts();
     } finally {
       setRefreshing(false);
     }
@@ -156,15 +123,12 @@ export function StatusBar() {
       <button
         onClick={handleRefresh}
         className="no-drag flex items-center gap-1.5 px-1.5 hover:text-text-primary"
-        title="Detectar OpenCode novamente"
+        title="Atualizar estado do Fluxora"
       >
-        <span className={`w-1.5 h-1.5 rounded-full ${toneDot(opencodeTone[opencodeStatus])} ${opencodeStatus === "running" ? "flux-pulse-dot" : ""}`} />
-        <Zap size={10} />
-        <span className="text-text-secondary">OpenCode:</span>
-        <span className="text-text-primary">{opencodeLabels[opencodeStatus]}</span>
-        {opencodeSettings && opencodeSettings.binaryPath !== "opencode" && (
-          <span className="text-text-faint ml-1">({shortPath(opencodeSettings.binaryPath)})</span>
-        )}
+        <span className={`w-1.5 h-1.5 rounded-full ${providersReady ? "bg-success" : "bg-warning"}`} />
+        <Cable size={10} />
+        <span className="text-text-secondary">Providers:</span>
+        <span className="text-text-primary">{providerCount}</span>
         <RefreshCcw size={9} className={refreshing ? "animate-spin" : ""} />
       </button>
       <StatusPill label="Agentes" value={`${agentCount} ativos`} icon={<Layers size={10} />} />
@@ -218,9 +182,4 @@ function toneDot(tone: "default" | "warning" | "success" | "error" | "accent"): 
     case "accent": return "bg-accent";
     default: return "bg-text-muted";
   }
-}
-
-function shortPath(p: string): string {
-  if (p.length <= 24) return p;
-  return "…" + p.slice(-22);
 }

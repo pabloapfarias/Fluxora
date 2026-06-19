@@ -1106,9 +1106,9 @@ export function createMockAPI(): FluxoraAPI {
       onWorkflowEvent: (callback: (event: WorkflowEvent) => void) => subscribe(workflowEventListeners, callback),
       onJobUpdated: (callback: (job: BackgroundWorkflowJob) => void) => subscribe(jobListeners, callback),
       onApprovalChange: (callback: (approval: Approval) => void) => subscribe(approvalListeners, callback),
-      onOpenCodeStdout: (callback: (payload: { workflowRunId: string; jobId?: string; chunk: string }) => void) => subscribe(stdoutListeners, callback),
-      onOpenCodeStderr: (callback: (payload: { workflowRunId: string; jobId?: string; chunk: string }) => void) => subscribe(stderrListeners, callback),
-      onOpenCodeJsonEvent: (callback: (payload: { workflowRunId: string; jobId?: string; event: unknown }) => void) => subscribe(jsonListeners, callback),
+      onOpenCodeStdout: () => { throw new Error("OpenCode foi removido do FluxoraV1. Use events.subscribe com provider/stream-* e agent/step-* ."); },
+      onOpenCodeStderr: () => { throw new Error("OpenCode foi removido do FluxoraV1. Use events.subscribe com provider/stream-* e agent/step-* ."); },
+      onOpenCodeJsonEvent: () => { throw new Error("OpenCode foi removido do FluxoraV1. Use events.subscribe com provider/stream-* e agent/step-* ."); },
       // PR 005 — Barramento real do FluxoraV1 (fallback mock fora do
       // runtime Tauri). Mantém a mesma forma do barramento Tauri para
       // que o `desktopBridge` apenas roteie.
@@ -1152,103 +1152,21 @@ export function createMockAPI(): FluxoraAPI {
       },
     },
     opencode: {
-      detect: async (): Promise<OpenCodeDetection> => {
-        return {
-          status: opencodeStatus,
-          binaryPath: opencodeSettings.binaryPath,
-          message: opencodeStatus === "not_detected" ? "OpenCode CLI não detectado no ambiente de mock do navegador" : "Detectado (simulado)",
-          checkedAt: new Date().toISOString(),
-        };
-      },
-      getSettings: async () => ({ ...opencodeSettings }),
-      updateSettings: async (input: Partial<OpenCodeSettings>) => {
-        opencodeSettings = { ...opencodeSettings, ...input };
-        return { ...opencodeSettings };
-      },
-      getStatus: async () => opencodeStatus,
+      detect: async (): Promise<OpenCodeDetection> => { throw new Error("OpenCode foi removido do FluxoraV1."); },
+      getSettings: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
+      updateSettings: async (_input: Partial<OpenCodeSettings>) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
+      getStatus: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
       diagnostics: {
-        run: async (input: { binaryPath: string; runSmokeTest?: boolean; format?: "default" | "json"; controlledRunTest?: boolean }) => {
-          const smokeWarning = Boolean(input.runSmokeTest);
-          const controlled = Boolean(input.controlledRunTest);
-          lastDiagnosticResult = {
-            status: smokeWarning ? "session_warning" : "usable",
-            severity: smokeWarning ? "warning" : "success",
-            binaryPath: input.binaryPath,
-            resolvedPath: "/mock/opencode",
-            version: "1.16.2",
-            providersDetected: ["openrouter", "openai", "anthropic"],
-            supportsRun: true,
-            supportsFormatJson: true,
-            supportsAgent: true,
-            supportsModel: true,
-            supportsDir: true,
-            isCliUsable: true,
-            isRunCommandAvailable: true,
-            isSmokeTestBlocking: false,
-            runSmokeTest: input.runSmokeTest ? {
-              attempted: true,
-              success: false,
-              exitCode: 1,
-              stderr: "Error: Session not found",
-            } : { attempted: false, success: false },
-            controlledRunTest: controlled ? {
-              attempted: true,
-              success: true,
-              exitCode: 0,
-              stdout: '{"type":"text","text":"{\"ok\":true,\"purpose\":\"fluxora_controlled_test\",\"will_modify_files\":false}"}',
-              jsonEvents: [{ type: "text", text: '{"ok":true,"purpose":"fluxora_controlled_test","will_modify_files":false}' }],
-              changedFilesDetected: false,
-            } : undefined,
-            checks: [
-              { name: "version", command: "opencode --version", success: true, exitCode: 0, stdout: "1.16.2", durationMs: 4, severity: "info", interpretation: "OpenCode respondeu ao comando de versão." },
-              { name: "run_help", command: "opencode run --help", success: true, exitCode: 0, stdout: "opencode run [message..]", durationMs: 6, severity: "info", interpretation: "O comando run está disponível." },
-              { name: "models", command: "opencode models", success: false, exitCode: 1, stderr: "mock: não executado no navegador", durationMs: 5, severity: "warning", interpretation: "No mock do navegador, esse check é apenas ilustrativo." },
-              { name: "providers_list", command: "opencode providers list", success: true, exitCode: 0, stdout: "openrouter\nopenai\nanthropic", durationMs: 5, severity: "info", interpretation: "Providers listados com sucesso." },
-              ...(smokeWarning ? [{ name: input.format === "json" ? "run_smoke_json" : "run_smoke", command: `opencode run \"Responda apenas: OK\"${input.format === "json" ? " --format json" : ""}`, success: false, exitCode: 1, stderr: "Error: Session not found", durationMs: 10, severity: "warning" as const, interpretation: "No mock, Session not found é tratado como warning operacional." }] : []),
-              ...(controlled ? [{ name: "controlled_run_test", command: "opencode run <controlled> --format json --dir /mock/project", success: true, exitCode: 0, stdout: '{"ok":true}', durationMs: 18, severity: "info" as const, interpretation: "O teste controlado respondeu com sucesso sem alterar arquivos." }] : []),
-            ],
-            environment: {
-              platform: "browser",
-              arch: "mock",
-              cwd: "/mock/browser",
-              execPath: "vite",
-              home: "/mock/home",
-              path: "/mock/bin",
-              shell: "/bin/bash",
-              resolvedBinaryPath: "/mock/opencode",
-            },
-            recommendations: ["OpenCode detectado no mock. No navegador, a validação real depende do Electron.", "O comando correto para providers é opencode providers list."],
-            checkedAt: new Date().toISOString(),
-          } as OpenCodeDiagnosticResult;
-          return lastDiagnosticResult;
-        },
-        copyLastResult: async () => Boolean(lastDiagnosticResult),
+        run: async (_input: { binaryPath: string; runSmokeTest?: boolean; format?: "default" | "json"; controlledRunTest?: boolean }) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
+        copyLastResult: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
       },
       controlledExecution: {
-        run: async (input: { workflowRunId: string }) => {
-          const job: BackgroundWorkflowJob = { id: `mock-controlled-job-${Date.now()}`, workflowRunId: input.workflowRunId, projectId: workflowRuns.find((workflow) => workflow.id === input.workflowRunId)?.projectId || "mock-project", strategy: "controlled_execution", status: "running", startedAt: new Date().toISOString() };
-          jobs.push(job);
-          for (const listener of jobListeners) listener(job);
-          window.setTimeout(() => {
-            updateJob(job.id, { status: "completed", completedAt: new Date().toISOString() });
-          }, 50);
-          return { jobId: job.id, workflowRunId: input.workflowRunId };
-        },
-        getResult: async (jobId: string) => ({
-          status: "completed" as const,
-          workflowRunId: jobs.find((job) => job.id === jobId)?.workflowRunId || "mock-workflow",
-          projectId: jobs.find((job) => job.id === jobId)?.projectId || "mock-project",
-          projectRoot: "/mock/project",
-          projectPath: "/mock/project/tmp/controlled-execution-sandbox",
-          sandboxReadmePath: "/mock/project/tmp/controlled-execution-sandbox/README_CONTROLLED_TEST.md",
-          changedFiles: [{ path: "tmp/controlled-execution-sandbox/README_CONTROLLED_TEST.md", status: "modified" as const, additions: 1, deletions: 1 }],
-          outOfScopeFiles: [],
-          finalApprovalId: "mock-controlled-approval",
-        }),
+        run: async (_input: { workflowRunId: string }) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
+        getResult: async (_jobId: string) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
       },
-      getCatalog: async () => ({ ...mockCatalog, fetchedAt: new Date().toISOString() }),
-      getModelsForProvider: async (providerId: string) => mockModelsByProvider[providerId] || [],
-      refreshCatalog: async () => ({ ...mockCatalog, fetchedAt: new Date().toISOString() }),
+      getCatalog: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
+      getModelsForProvider: async (_providerId: string) => { throw new Error("OpenCode foi removido do FluxoraV1."); },
+      refreshCatalog: async () => { throw new Error("OpenCode foi removido do FluxoraV1."); },
     },
     git: {
       inspect: async (projectId: string): Promise<GitInspectionResult> => {

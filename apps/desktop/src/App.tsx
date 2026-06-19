@@ -10,7 +10,6 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { SchedulePage } from "./pages/SchedulePage";
 import { ShortcutsPage } from "./pages/ShortcutsPage";
 import { UsagePage } from "./pages/UsagePage";
-import { RealTimeTranslatorPage } from "./pages/RealTimeTranslatorPage";
 
 export default function App() {
   return (
@@ -27,7 +26,6 @@ export default function App() {
         <Route path="/shortcuts" element={<ShortcutsPage />} />
         <Route path="/usage" element={<UsagePage />} />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/translator" element={<RealTimeTranslatorPage />} />
       </Routes>
     </AppShell>
   );

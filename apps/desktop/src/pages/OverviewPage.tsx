@@ -53,7 +53,6 @@ import { CommandPanel } from "../components/overview/CommandPanel";
 import { MissionDiagnosticModal, type ProjectRecommendationSummary } from "../components/overview/MissionDiagnosticModal";
 import { RecentExecutions } from "../components/overview/RecentExecutions";
 import { EventLog } from "../components/events/EventLog";
-import { ControlledExecutionPanel, findControlledProject } from "../components/settings/ControlledExecutionPanel";
 import { ActiveProjectBlock } from "../components/overview/ActiveProjectBlock";
 import { ProjectSwitcherModal } from "../components/overview/ProjectSwitcherModal";
 import { MissionResultDrawer } from "../components/overview/MissionResultDrawer";
@@ -61,8 +60,9 @@ import { ActionButton, MarkdownRenderer } from "../components/ui";
 import { useLiveExecutionEvents } from "../hooks/useLiveExecutionEvents";
 import type { OpenCodeResponse } from "../hooks/useLiveExecutionEvents";
 import { classifyCommandIntent } from "../lib/presentationLabels";
+import { loadProviderCatalog } from "../lib/providerCatalog";
 
-type OverviewExecutionMode = "simulated" | "real" | "multi_agent" | "controlled_execution";
+type OverviewExecutionMode = "simulated" | "real" | "multi_agent";
 
 const EXECUTION_MODE_STORAGE_KEY = "fluxora:overviewExecutionMode";
 
@@ -81,7 +81,7 @@ export function OverviewPage() {
   const [executionMode, setExecutionMode] = useState<OverviewExecutionMode>(() => {
     try {
       const stored = window.localStorage.getItem(EXECUTION_MODE_STORAGE_KEY);
-      if (stored === "simulated" || stored === "real" || stored === "multi_agent" || stored === "controlled_execution") {
+      if (stored === "simulated" || stored === "real" || stored === "multi_agent") {
         return stored;
       }
     } catch {
@@ -151,7 +151,6 @@ export function OverviewPage() {
 
   useEffect(() => {
     loadData();
-    void window.fluxora.opencode.getStatus().then(setOpencodeStatus).catch(() => {});
     const unsubApproval = (window as any).fluxora.events?.onApprovalChange?.(() => loadDataRef.current());
     const unsubJob = (window as any).fluxora.events?.onJobUpdated?.(() => loadDataRef.current());
     const interval = setInterval(() => loadDataRef.current(), 3000);
@@ -178,12 +177,11 @@ export function OverviewPage() {
 
   async function loadData(explicitProjectId?: string | null) {
     const loadGeneration = ++loadGenerationRef.current;
-    const [p, r, ag, providerList, catalogResult, approvals, jobs] = await Promise.all([
+    const [p, r, ag, providerList, approvals, jobs] = await Promise.all([
       window.fluxora.projects.list(),
       window.fluxora.workflows.list(),
       window.fluxora.agents.list(),
       window.fluxora.providers.list(),
-      window.fluxora.opencode.getCatalog(),
       window.fluxora.approvals.list(),
       window.fluxora.workflows.listJobs(),
     ]);
@@ -192,10 +190,12 @@ export function OverviewPage() {
       return;
     }
 
+    const catalogResult = await loadProviderCatalog(providerList);
     setProjects(p);
     setAgents(ag.filter((a: Agent) => a.enabled));
     setProviders(providerList);
     setCatalog(catalogResult);
+    setOpencodeStatus(providerList.some((provider) => provider.enabled) ? "detected" : "not_detected");
 
     // Use explicit projectId if provided, otherwise fall back to ref (always up-to-date)
     const effectiveProjectId = explicitProjectId !== undefined ? explicitProjectId : selectedProjectIdRef.current;
@@ -558,7 +558,7 @@ export function OverviewPage() {
       const mode: WorkflowExecutionMode = executionMode === "simulated" ? "simulated" : "real";
       const strategy: RealWorkflowStrategy | undefined =
         executionMode === "multi_agent" ? "multi_agent" :
-        executionMode === "real" || executionMode === "controlled_execution" ? "single" :
+        executionMode === "real" ? "single" :
         undefined;
 
       // Pick a project (active project or first available)
@@ -629,11 +629,7 @@ export function OverviewPage() {
       await loadData();
 
       // Execute based on mode
-      if (executionMode === "controlled_execution" && canRunControlledExecution) {
-        // Controlled execution: dispatch to runner directly
-        await window.fluxora.opencode.controlledExecution.run({ workflowRunId: run.id });
-        await loadData();
-      } else if (executionMode === "real" || executionMode === "multi_agent") {
+      if (executionMode === "real" || executionMode === "multi_agent") {
         // Real/multi_agent: execute directly — auto-approve the initial gate
         // so the real runner starts. The runner creates a contextual final
         // approval only when files are actually changed.
@@ -776,11 +772,6 @@ export function OverviewPage() {
         events={events}
         onCancel={handleCancelActiveJob}
       />
-
-      {/* ─── Controlled Execution Panel ─── */}
-      {executionMode === "controlled_execution" && canRunControlledExecution && (
-        <ControlledExecutionPanel />
-      )}
 
       {/* ─── Mission Result (compact card) ─── */}
       <MissionResultCompactCard
@@ -950,6 +941,10 @@ function MissionResultPanel({ responses, events, activeRun }: { responses: OpenC
       </div>
     </div>
   );
+}
+
+function findControlledProject(projects: Project[]) {
+  return projects.find((project) => project.name.toLowerCase().includes("controle") || project.path.toLowerCase().includes("controlled")) || null;
 }
 
 // ─── MissionResultCompactCard — card-resumo compacto do resultado ──────────
@@ -1193,7 +1188,7 @@ export function ControlledExecutionGate({
     blockers.push("Projeto atual não possui caminho local configurado.");
   }
   if (!isOpencodeUsable) {
-    blockers.push("OpenCode ainda não foi validado. Execute o diagnóstico antes.");
+    blockers.push("Nenhum provider ativo disponível. Configure um provider antes de executar esta rotina.");
   }
   if (gitAvailable === false) {
     blockers.push("Git não está disponível para o projeto selecionado.");

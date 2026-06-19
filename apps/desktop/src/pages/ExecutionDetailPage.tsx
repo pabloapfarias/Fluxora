@@ -21,7 +21,7 @@ import type {
   Approval,
   ApprovalContext,
   BackgroundWorkflowJob,
-  ControlledExecutionRunResult,
+  FluxoraEvent,
   WorkflowEvent,
   WorkflowRunDetail,
   WorkflowRerunInput,
@@ -47,7 +47,6 @@ export function ExecutionDetailPage() {
   const [outputs, setOutputs] = useState<AgentStepOutput[]>([]);
   const [job, setJob] = useState<BackgroundWorkflowJob | null>(null);
   const [tab, setTab] = useState<DetailTab>("resumo");
-  const [controlledResult, setControlledResult] = useState<ControlledExecutionRunResult | null>(null);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [approvalActionLoading, setApprovalActionLoading] = useState<"approve" | "reject" | null>(null);
@@ -104,17 +103,12 @@ export function ExecutionDetailPage() {
     const unsubscribeJobs = window.fluxora.events.onJobUpdated((nextJob) => {
       if (nextJob.workflowRunId === id) setJob(nextJob);
     });
-    const unsubscribeStdout = window.fluxora.events.onOpenCodeStdout((payload) => {
-      if (payload.workflowRunId !== id) return;
-      pushSyntheticEvent(id, `STDOUT: ${payload.chunk}`, "opencode.stdout", setDetail);
-    });
-    const unsubscribeStderr = window.fluxora.events.onOpenCodeStderr((payload) => {
-      if (payload.workflowRunId !== id) return;
-      pushSyntheticEvent(id, `STDERR: ${payload.chunk}`, "opencode.stderr", setDetail);
-    });
-    const unsubscribeJson = window.fluxora.events.onOpenCodeJsonEvent((payload) => {
-      if (payload.workflowRunId !== id) return;
-      pushSyntheticEvent(id, JSON.stringify(payload.event), "opencode.json_event", setDetail);
+    const unsubscribeBus = window.fluxora.events.subscribe((event) => {
+      const mapped = mapFluxoraEventToWorkflowEvent(event);
+      if (!mapped || mapped.workflowRunId !== id) return;
+      setDetail((current) =>
+        current ? { ...current, events: appendEvent(current.events, mapped) } : current
+      );
     });
     const unsubscribeApproval = window.fluxora.events.onApprovalChange((updated) => {
       if (updated.workflowRunId !== id) return;
@@ -124,9 +118,7 @@ export function ExecutionDetailPage() {
       clearInterval(interval);
       unsubscribeEvents();
       unsubscribeJobs();
-      unsubscribeStdout();
-      unsubscribeStderr();
-      unsubscribeJson();
+      unsubscribeBus();
       unsubscribeApproval();
     };
   }, [id]);
@@ -146,21 +138,6 @@ export function ExecutionDetailPage() {
           ["queued", "running"].includes(entry.status)
       ) || null
     );
-
-    const controlledJob = jobs.find(
-      (entry) =>
-        entry.workflowRunId === workflowId &&
-        entry.strategy === "controlled_execution" &&
-        ["completed", "failed", "cancelled"].includes(entry.status)
-    );
-    if (controlledJob) {
-      try {
-        const result = await window.fluxora.opencode.controlledExecution.getResult(controlledJob.id);
-        if (result) setControlledResult(result);
-      } catch {
-        // noop
-      }
-    }
 
     if (d.finalApprovalId) {
       try {
@@ -410,7 +387,7 @@ export function ExecutionDetailPage() {
               <AgentStepOutputPanel outputs={outputs} />
             ) : (
               <div className="text-[13px] text-text-muted py-8 text-center">
-                Esta missão foi executada diretamente pelo OpenCode (modo {isReal ? "Real" : "Simulado"}).
+                Esta missão não registrou steps detalhados de agentes.
               </div>
             )}
           </div>
@@ -447,7 +424,6 @@ export function ExecutionDetailPage() {
             feedback={feedback}
             events={detail.events}
             isControlledExecution={isControlledExecution}
-            controlledResult={controlledResult}
           />
         )}
 
@@ -664,7 +640,6 @@ function ApprovalSection({
   feedback,
   events,
   isControlledExecution,
-  controlledResult,
 }: {
   approval: Approval | null;
   runPrompt?: string;
@@ -674,7 +649,6 @@ function ApprovalSection({
   feedback: { kind: "success" | "error"; message: string } | null;
   events: WorkflowEvent[];
   isControlledExecution: boolean;
-  controlledResult: ControlledExecutionRunResult | null;
 }) {
   const isPending = approval?.status === "pending";
 
@@ -828,28 +802,6 @@ function ApprovalSection({
           )}
         </div>
       )}
-
-      {/* Controlled execution info */}
-      {isControlledExecution && controlledResult && (
-        <div className="bg-bg-card border border-border rounded-xl p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <ShieldCheck size={16} className="text-accent" />
-            <h3 className="text-sm font-medium text-text-primary">Execução Controlada</h3>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <SummaryItem label="Arquivos alterados" value={String(controlledResult.changedFiles?.length || 0)} />
-            <SummaryItem
-              label="Fora do escopo"
-              value={
-                controlledResult.outOfScopeFiles?.length
-                  ? `${controlledResult.outOfScopeFiles.length} arquivo(s)`
-                  : "nenhum"
-              }
-              tone={controlledResult.outOfScopeFiles?.length ? "text-warning" : undefined}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -892,7 +844,7 @@ function parseErrorMetadata(raw?: string): ParsedErrorMeta | null {
 
 function ErrorEventCard({ event }: { event: WorkflowEvent }) {
   const origin = event.type.includes("opencode")
-    ? "OpenCode"
+    ? "Provider stream"
     : event.type.includes("multi_agent")
     ? "MultiAgentRunner"
     : event.type.includes("controlled_execution")
@@ -1063,26 +1015,27 @@ function appendEvent(events: WorkflowEvent[], event: WorkflowEvent) {
   return [...events, event].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-function pushSyntheticEvent(
-  workflowRunId: string,
-  message: string,
-  type: string,
-  setDetail: Dispatch<SetStateAction<WorkflowRunDetail | null>>
-) {
+function mapFluxoraEventToWorkflowEvent(event: FluxoraEvent): WorkflowEvent | null {
+  const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : null;
+  const workflowRunId =
+    (typeof payload?.workflowRunId === "string" && payload.workflowRunId) ||
+    (typeof event.missionId === "string" && event.missionId) ||
+    undefined;
+  const message =
+    event.message ||
+    (typeof payload?.delta === "string" ? payload.delta : undefined) ||
+    event.type;
   const normalized = normalizeLogText(message);
-  if (!normalized) return;
-  setDetail((current) => {
-    if (!current || current.id !== workflowRunId) return current;
-    const event: WorkflowEvent = {
-      id: `stream-${type}-${Date.now()}-${Math.random()}`,
-      workflowRunId,
-      projectId: current.projectId,
-      type,
-      message: normalized,
-      createdAt: new Date().toISOString(),
-    };
-    return { ...current, events: appendEvent(current.events, event) };
-  });
+  if (!normalized) return null;
+  return {
+    id: event.id,
+    workflowRunId,
+    projectId: event.projectId,
+    type: event.type,
+    message: normalized,
+    metadata: payload ? JSON.stringify(payload) : undefined,
+    createdAt: event.timestamp,
+  };
 }
 
 function formatDuration(startMs: number, endMs: number): string {
@@ -1115,24 +1068,8 @@ function RerunModal({
   onClose: () => void;
   onSubmit: (overrides: WorkflowRerunInput) => void | Promise<void>;
 }) {
-  // Tenta ler o timeout atual das configurações do OpenCode; falha silenciosamente.
   const [currentTimeoutMs, setCurrentTimeoutMs] = useState<number>(5 * 60 * 1000);
-  useEffect(() => {
-    let mounted = true;
-    window.fluxora.opencode
-      .getSettings()
-      .then((s) => {
-        if (mounted && typeof s.defaultTimeoutMs === "number") {
-          setCurrentTimeoutMs(s.defaultTimeoutMs);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
-  // Default: 2x o timeout atual (sugestão para missões que estouraram o limite).
   const suggestedMs = useMemo(() => Math.max(currentTimeoutMs * 2, 10 * 60 * 1000), [currentTimeoutMs]);
   const [prompt, setPrompt] = useState(run.prompt);
   const [useTimeoutOverride, setUseTimeoutOverride] = useState(true);

@@ -1,11 +1,9 @@
 import {
   Workflow,
   ClipboardList,
-  Code2,
-  Smartphone,
   ShieldCheck,
-  ServerCog,
   Cpu,
+  Sparkles,
 } from "lucide-react";
 import { isAgentConfiguredForRealExecution, type Agent, type OpenCodeCatalogResult } from "@fluxora/shared";
 import { ActionButton, MissionCard } from "../ui";
@@ -13,24 +11,18 @@ import { ActionButton, MissionCard } from "../ui";
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const agentIcons: Record<string, typeof Workflow> = {
-  orchestrator: Workflow,
   planner: ClipboardList,
-  "backend-dev": Code2,
-  "frontend-dev": Code2,
-  "mobile-dev": Smartphone,
+  developer: Sparkles,
   qa: ShieldCheck,
-  devops: ServerCog,
+  finalizer: Workflow,
   custom: Cpu,
 };
 
 const agentDescriptions: Record<string, string> = {
-  orchestrator: "Coordena todo o processo",
   planner: "Analisa e cria o plano técnico",
-  "backend-dev": "Implementa na API (Laravel)",
-  "frontend-dev": "Implementa na web (Vue/Next)",
-  "mobile-dev": "Implementa no App (Flutter)",
+  developer: "Implementa a solução principal",
   qa: "Valida e testa as alterações",
-  devops: "Deploy e infraestrutura",
+  finalizer: "Consolida a resposta final entregue ao usuário",
   custom: "Agente com papel personalizado",
 };
 

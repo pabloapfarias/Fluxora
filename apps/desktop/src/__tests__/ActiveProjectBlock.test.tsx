@@ -78,7 +78,7 @@ describe("ActiveProjectBlock", () => {
     expect(html).toContain("Sem Git");
   });
 
-  it("shows 'OpenCode detectado' when opencodeStatus is detected", () => {
+  it("shows 'Provider Engine pronto' when opencodeStatus is detected", () => {
     const html = renderToStaticMarkup(
       <ActiveProjectBlock
         project={fluxoraProject}
@@ -86,10 +86,10 @@ describe("ActiveProjectBlock", () => {
         opencodeStatus="detected"
       />,
     );
-    expect(html).toContain("OpenCode detectado");
+    expect(html).toContain("Provider Engine pronto");
   });
 
-  it("shows 'OpenCode não detectado' when opencodeStatus is not_detected", () => {
+  it("shows 'Sem provider configurado' when opencodeStatus is not_detected", () => {
     const html = renderToStaticMarkup(
       <ActiveProjectBlock
         project={fluxoraProject}
@@ -97,7 +97,7 @@ describe("ActiveProjectBlock", () => {
         opencodeStatus="not_detected"
       />,
     );
-    expect(html).toContain("OpenCode não detectado");
+    expect(html).toContain("Sem provider configurado");
   });
 
   it("shows branch when provided", () => {

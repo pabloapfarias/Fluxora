@@ -13,7 +13,6 @@ import {
   Zap,
   Keyboard,
   BarChart3,
-  Mic,
 } from "lucide-react";
 import type { Project } from "@fluxora/shared";
 import { useActiveProject } from "../../contexts/ActiveProjectContext";
@@ -30,7 +29,6 @@ const navItems = [
   { to: "/approvals", label: "Aprovações", icon: ShieldCheck },
   { to: "/schedule", label: "Cronograma", icon: Calendar },
   { to: "/shortcuts", label: "Atalhos", icon: Keyboard },
-  { to: "/translator", label: "MiMo Voice", icon: Mic },
   { to: "/settings", label: "Configurações", icon: Settings },
 ];
 

@@ -10,9 +10,11 @@ import {
   type Project,
   type CreateProjectInput,
   type Agent,
+  type AgentConfig,
   type AiProviderConfig,
   type OpenCodeCatalogResult,
 } from "@fluxora/shared";
+import { loadProviderCatalog } from "../lib/providerCatalog";
 
 export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -37,12 +39,12 @@ export function ProjectsPage() {
   }
 
   async function loadAgentsAndProviders() {
-    const [agentList, providerList, catalogResult] = await Promise.all([
-      window.fluxora.agents.list(),
+    const [agentList, providerList] = await Promise.all([
+      window.fluxora.agents.listConfigs(),
       window.fluxora.providers.list(),
-      window.fluxora.opencode.getCatalog(),
     ]);
-    setAgents(agentList);
+    const catalogResult = await loadProviderCatalog(providerList);
+    setAgents(agentList.map(toLegacyAgent));
     setProviders(providerList);
     setCatalog(catalogResult);
   }
@@ -301,4 +303,30 @@ export function ProjectsPage() {
       </div>
     </div>
   );
+}
+
+function toLegacyAgent(agent: AgentConfig): Agent {
+  const role =
+    agent.role === "developer"
+      ? "backend-dev"
+      : agent.role === "finalizer"
+        ? "custom:finalizer"
+        : agent.role === "custom"
+          ? "custom:agent"
+          : agent.role;
+
+  return {
+    id: agent.id,
+    name: agent.name,
+    role,
+    description: agent.description || "",
+    canEditFiles: agent.role === "developer",
+    canRunCommands: false,
+    requiresApproval: false,
+    modelProviderId: agent.providerId,
+    modelName: agent.model,
+    enabled: agent.status === "enabled",
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt,
+  };
 }

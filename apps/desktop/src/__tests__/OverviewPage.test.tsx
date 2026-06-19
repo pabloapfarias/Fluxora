@@ -84,14 +84,14 @@ const activeJob: BackgroundWorkflowJob = {
 // ---------------------------------------------------------------------------
 
 describe("OverviewPage — Execution mode selector", () => {
-  it("CommandPanel renders mode selector with all four modes", () => {
+  it("CommandPanel renders mode selector with the active product modes", () => {
     const html = renderToStaticMarkup(
       <CommandPanel executionMode="simulated" onModeChange={() => {}} />,
     );
     expect(html).toContain("Simulado");
     expect(html).toContain("Real");
     expect(html).toContain("Multiagente");
-    expect(html).toContain("Controlada");
+    expect(html).not.toContain("Controlada");
   });
 
   it("Multiagente is marked as Experimental", () => {
@@ -146,7 +146,7 @@ describe("OverviewPage — ControlledExecutionGate", () => {
     expect(html).toContain("Projeto Fluxora não está cadastrado");
   });
 
-  it("shows blocker message when OpenCode is not validated", () => {
+  it("shows blocker message when no active provider is configured", () => {
     const html = renderToStaticMarkup(
       <ControlledExecutionGate
         controlledProject={fluxoraProject}
@@ -156,7 +156,7 @@ describe("OverviewPage — ControlledExecutionGate", () => {
         canRun={false}
       />,
     );
-    expect(html).toContain("OpenCode ainda não foi validado");
+    expect(html).toContain("Nenhum provider ativo disponível");
   });
 
   it("shows blocker message when git is not available", () => {
@@ -183,7 +183,7 @@ describe("OverviewPage — ControlledExecutionGate", () => {
       />,
     );
     expect(html).toContain("Projeto Fluxora não está cadastrado");
-    expect(html).toContain("OpenCode ainda não foi validado");
+    expect(html).toContain("Nenhum provider ativo disponível");
     expect(html).toContain("Git não está disponível");
   });
 
@@ -198,7 +198,7 @@ describe("OverviewPage — ControlledExecutionGate", () => {
       />,
     );
     expect(html).not.toContain("Projeto Fluxora não está cadastrado");
-    expect(html).not.toContain("OpenCode ainda não foi validado");
+    expect(html).not.toContain("Nenhum provider ativo disponível");
     expect(html).not.toContain("Git não está disponível");
   });
 
@@ -417,24 +417,28 @@ describe("OverviewPage — Command creates execution", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. OpenCode response extraction
+// 8. Stream response extraction
 // ---------------------------------------------------------------------------
 
-describe("OverviewPage — OpenCode response appears when text event arrives", () => {
-  it("json-event listeners receive text events through the mock API", async () => {
+describe("OverviewPage — stream response appears when text event arrives", () => {
+  it("generic event subscribers receive stream chunk events through the mock API", async () => {
     const { createMockAPI } = await import("../api/mock-api");
     const api = createMockAPI();
 
     const received: unknown[] = [];
-    const unsub = api.events.onOpenCodeJsonEvent((payload) => {
-      received.push(payload);
+    const unsub = api.events.subscribe((event) => {
+      if (event.type === "app/diagnostic") {
+        received.push(event);
+      }
     });
 
-    // Simulate what the real adapter does — emit a json event
-    // We trigger it indirectly by creating a workflow and approving it
-    // (the mock emits stdout events, which the hook converts to synthetic events)
-    // For a direct test, we verify the listener registration works.
-    expect(typeof unsub).toBe("function");
+    await api.events.emitDiagnostic({
+      message: "texto livre",
+      missionId: "wf-1",
+      payload: { workflowRunId: "wf-1", delta: "texto livre" },
+    });
+
+    expect(received.length).toBeGreaterThan(0);
     unsub();
   });
 

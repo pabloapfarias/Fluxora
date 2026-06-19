@@ -48,12 +48,7 @@ export function VoiceContextCard({ context, transcript, onWorkflowCreated, onCan
   const [showDetails, setShowDetails] = useState(false);
   const [mode, setMode] = useState<WorkflowExecutionMode>("simulated");
   const [realStrategy, setRealStrategy] = useState<RealWorkflowStrategy>("multi_agent");
-  const [opencodeStatus, setOpencodeStatus] = useState<string | null>(null);
   const navigate = useNavigate();
-
-  useState(() => {
-    void window.fluxora.opencode.getStatus().then(setOpencodeStatus).catch(() => {});
-  });
 
   const handleStartExecution = async () => {
     setCreating(true);
@@ -164,9 +159,6 @@ export function VoiceContextCard({ context, transcript, onWorkflowCreated, onCan
           <div className="flex items-center gap-2 text-[12px] text-text-muted">
             <FlaskConical size={13} />
             <span>Modo de execução</span>
-            {opencodeStatus && opencodeStatus !== "detected" && mode === "real" && (
-              <span className="text-[10.5px] text-warning">— OpenCode não detectado (modo browser mock)</span>
-            )}
           </div>
           <div className="flex rounded-md border border-border overflow-hidden">
             <button
@@ -179,7 +171,7 @@ export function VoiceContextCard({ context, transcript, onWorkflowCreated, onCan
               onClick={() => setMode("real")}
               className={`no-drag px-3 h-8 text-[12px] flex items-center gap-1.5 ${mode === "real" ? "bg-accent text-white" : "bg-bg-input text-text-secondary hover:text-text-primary"}`}
             >
-              <Zap size={12} /> Real (OpenCode)
+              <Zap size={12} /> Real
             </button>
           </div>
         </div>
@@ -194,7 +186,7 @@ export function VoiceContextCard({ context, transcript, onWorkflowCreated, onCan
               <button
                 onClick={() => setRealStrategy("single")}
                 className={`no-drag px-3 h-8 text-[12px] flex items-center gap-1.5 ${realStrategy === "single" ? "bg-accent text-white" : "bg-bg-input text-text-secondary hover:text-text-primary"}`}
-                title="Uma única chamada consolidada ao OpenCode"
+                title="Uma única execução consolidada"
               >
                 Simples
               </button>
@@ -215,7 +207,7 @@ export function VoiceContextCard({ context, transcript, onWorkflowCreated, onCan
             <div><span className="text-text-muted">Resumo:</span> {context.summary}</div>
             <div><span className="text-text-muted">Risco:</span> {context.risk}</div>
             <div><span className="text-text-muted">Requer aprovação:</span> {context.requiresApproval ? "Sim" : "Não"}</div>
-            <div><span className="text-text-muted">Modo:</span> {mode === "real" ? "Real (OpenCode CLI)" : "Simulado"}</div>
+            <div><span className="text-text-muted">Modo:</span> {mode === "real" ? "Real" : "Simulado"}</div>
           </div>
         )}
       </div>

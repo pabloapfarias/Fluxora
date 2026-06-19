@@ -177,7 +177,7 @@ export function AgentsPage() {
       <div className="rounded-xl border border-warning/25 bg-warning/10 px-4 py-3 text-[12px] text-text-secondary flex items-start gap-2">
         <AlertTriangle size={14} className="text-warning flex-shrink-0 mt-0.5" />
         <div>
-          Backend Dev, Frontend Dev, Mobile Dev e Orquestrador eram agentes legados/mock. A execução real usa
+          A execução real do Fluxora usa
           {" "}
           <strong className="text-text-primary">Planner, Developer, QA e Finalizer</strong>.
         </div>

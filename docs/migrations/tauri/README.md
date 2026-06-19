@@ -296,6 +296,13 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   `pnpm dev` bloqueado por porta 1420 em uso; 6 falhas
   preexistentes em `pnpm test` (tema/voz) mantidas sem
   correção nesta PR.
+- [PR 013 — Limpeza OpenCode, providers reais e UX](./STATUS_MIGRATION_TAURI_PR_013_CLEAN_OPENCODE_PROVIDER_UX.md)
+  Remove OpenCode da UI ativa do FluxoraV1, elimina a rota
+  antiga de laboratório, troca o cadastro de providers para
+  fluxo real persistido em `providers.json`, limpa textos de
+  migração/legado/Electron/mock da experiência principal e
+  consolida o Provider Engine próprio como fonte única de
+  verdade para providers e modelos.
 
 ## Convenções aplicadas em todas as PRs
 

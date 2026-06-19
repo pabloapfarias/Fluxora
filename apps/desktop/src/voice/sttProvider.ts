@@ -91,7 +91,7 @@ export function describeProviderType(
     case "whisper_http":
       return "Whisper HTTP (OpenAI-compatible)";
     case "openai_whisper":
-      return "OpenAI Whisper (legado)";
+      return "OpenAI Whisper";
     case "manual":
       return "Manual (sem captura)";
     default:

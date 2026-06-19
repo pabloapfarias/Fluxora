@@ -4,7 +4,6 @@ import {
   FlaskConical,
   Zap,
   Users,
-  ShieldCheck,
   AlertTriangle,
   FolderOpen,
   Eraser,
@@ -23,8 +22,7 @@ import {
 export type ExecutionModeValue =
   | "simulated"
   | "real"
-  | "multi_agent"
-  | "controlled_execution";
+  | "multi_agent";
 
 interface ModeOption {
   value: ExecutionModeValue;
@@ -37,7 +35,6 @@ const MODE_OPTIONS: ModeOption[] = [
   { value: "simulated", label: "Simulado", icon: FlaskConical, badgeMode: "simulated" },
   { value: "real", label: "Real", icon: Zap, badgeMode: "real" },
   { value: "multi_agent", label: "Multiagente", icon: Users, badgeMode: "multiagent" },
-  { value: "controlled_execution", label: "Controlada", icon: ShieldCheck, badgeMode: "controlled" },
 ];
 
 function formatDeveloperRole(role: string): string {

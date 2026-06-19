@@ -19,6 +19,7 @@ import {
   ActionButton,
   type StatusBadgeStatus,
 } from "../ui";
+import { loadProviderCatalog } from "../../lib/providerCatalog";
 
 function mapRunStatus(status: string): StatusBadgeStatus {
   switch (status) {
@@ -46,14 +47,36 @@ export function RightPanel() {
   useEffect(() => {
     let mounted = true;
     const loadAgentsAndJobs = async () => {
-      const [a, catalogResult, nextJobs] = await Promise.all([
-        window.fluxora.agents.list(),
-        window.fluxora.opencode.getCatalog(),
+      const [a, providers, nextJobs] = await Promise.all([
+        window.fluxora.agents.listConfigs(),
+        window.fluxora.providers.list(),
         window.fluxora.workflows.listJobs(),
       ]);
       if (!mounted) return;
-      setAgents(a);
-      setCatalog(catalogResult);
+      setAgents(
+        a.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          role:
+            agent.role === "developer"
+              ? "backend-dev"
+              : agent.role === "finalizer"
+                ? "custom:finalizer"
+                : agent.role === "custom"
+                  ? "custom:agent"
+                  : agent.role,
+          description: agent.description || "",
+          canEditFiles: agent.role === "developer",
+          canRunCommands: false,
+          requiresApproval: false,
+          modelProviderId: agent.providerId,
+          modelName: agent.model,
+          enabled: agent.status === "enabled",
+          createdAt: agent.createdAt,
+          updatedAt: agent.updatedAt,
+        }))
+      );
+      setCatalog(await loadProviderCatalog(providers));
       setJobs(nextJobs.filter((job: BackgroundWorkflowJob) => ["queued", "running"].includes(job.status)).slice(0, 3));
     };
     loadAgentsAndJobs();

@@ -52,7 +52,7 @@ export function summarizeEventMessage(event: WorkflowEvent, max = 120): string {
     const source = event.type === "opencode.stderr" ? "stderr" : "stdout";
     const firstLine = clean.split("\n").find(Boolean) || "saída capturada";
     const short = firstLine.length > max ? `${firstLine.slice(0, max - 1)}…` : firstLine;
-    return `OpenCode ${source}: ${short}`;
+    return `Fluxora stream ${source}: ${short}`;
   }
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }

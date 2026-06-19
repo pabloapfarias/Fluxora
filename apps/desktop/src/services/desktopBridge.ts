@@ -91,6 +91,10 @@ function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+function deprecatedOpenCodeError(method: string): Error {
+  return new Error(`OpenCode foi removido do FluxoraV1. Use Provider Engine, Mission Engine e Agent Engine. Método legado: ${method}.`);
+}
+
 /**
  * Codifica bytes em base64. O Tauri 2 serializa argumentos
  * via JSON, então `Uint8Array` viraria `number[]` (gigante
@@ -2322,9 +2326,9 @@ export function createDesktopBridge(): FluxoraAPI {
       onWorkflowEvent: mock.events.onWorkflowEvent.bind(mock.events),
       onJobUpdated: mock.events.onJobUpdated.bind(mock.events),
       onApprovalChange: mock.events.onApprovalChange.bind(mock.events),
-      onOpenCodeStdout: mock.events.onOpenCodeStdout.bind(mock.events),
-      onOpenCodeStderr: mock.events.onOpenCodeStderr.bind(mock.events),
-      onOpenCodeJsonEvent: mock.events.onOpenCodeJsonEvent.bind(mock.events),
+      onOpenCodeStdout: () => { throw deprecatedOpenCodeError("events.onOpenCodeStdout"); },
+      onOpenCodeStderr: () => { throw deprecatedOpenCodeError("events.onOpenCodeStderr"); },
+      onOpenCodeJsonEvent: () => { throw deprecatedOpenCodeError("events.onOpenCodeJsonEvent"); },
       // PR 005 — Métodos do barramento real do FluxoraV1. Em
       // runtime Tauri, escutam o canal `fluxora-event` emitido
       // pelo backend Rust. Fora do runtime Tauri, caem no ring
@@ -2355,58 +2359,26 @@ export function createDesktopBridge(): FluxoraAPI {
       },
     },
     opencode: {
-      // Legado OpenCode. Em runtime Tauri, o catálogo exposto
-      // aqui reflete apenas os providers reais do Provider
-      // Engine. Quando não há provider real, devolvemos
-      // catálogo vazio e não caímos no mock legado para evitar
-      // falso positivo de prontidão. Fora do runtime Tauri, o
-      // mock legado continua existindo para o modo browser.
-      detect: mock.opencode.detect.bind(mock.opencode),
-      getSettings: mock.opencode.getSettings.bind(mock.opencode),
-      updateSettings: mock.opencode.updateSettings.bind(mock.opencode),
-      getStatus: mock.opencode.getStatus.bind(mock.opencode),
-      diagnostics: mock.opencode.diagnostics,
-      controlledExecution: mock.opencode.controlledExecution,
-      async getCatalog(): Promise<OpenCodeCatalogResult> {
-        if (isTauriRuntime()) {
-          try {
-            return await buildCatalogFromProviders();
-          } catch (error) {
-            console.warn(
-              "[desktopBridge] buildCatalogFromProviders falhou, usando catálogo vazio",
-              error
-            );
-            return {
-              providers: [],
-              models: [],
-              modelsByProvider: {},
-              fetchedAt: new Date().toISOString(),
-              error: "Falha ao consultar providers reais do Provider Engine.",
-            };
-          }
-        }
-        return mock.opencode.getCatalog();
+      detect: async () => { throw deprecatedOpenCodeError("opencode.detect"); },
+      getSettings: async () => { throw deprecatedOpenCodeError("opencode.getSettings"); },
+      updateSettings: async () => { throw deprecatedOpenCodeError("opencode.updateSettings"); },
+      getStatus: async () => { throw deprecatedOpenCodeError("opencode.getStatus"); },
+      diagnostics: {
+        run: async () => { throw deprecatedOpenCodeError("opencode.diagnostics.run"); },
+        copyLastResult: async () => { throw deprecatedOpenCodeError("opencode.diagnostics.copyLastResult"); },
       },
-      async getModelsForProvider(providerId: string): Promise<OpenCodeModel[]> {
-        if (isTauriRuntime()) {
-          try {
-            const catalog = await buildCatalogFromProviders();
-            return catalog.modelsByProvider[providerId] || [];
-          } catch (error) {
-            console.warn(
-              "[desktopBridge] getModelsForProvider falhou, usando []",
-              error
-            );
-            return [];
-          }
-        }
-        return mock.opencode.getModelsForProvider(providerId);
+      controlledExecution: {
+        run: async () => { throw deprecatedOpenCodeError("opencode.controlledExecution.run"); },
+        getResult: async () => { throw deprecatedOpenCodeError("opencode.controlledExecution.getResult"); },
+      },
+      async getCatalog(): Promise<OpenCodeCatalogResult> {
+        throw deprecatedOpenCodeError("opencode.getCatalog");
+      },
+      async getModelsForProvider(_providerId: string): Promise<OpenCodeModel[]> {
+        throw deprecatedOpenCodeError("opencode.getModelsForProvider");
       },
       async refreshCatalog(): Promise<OpenCodeCatalogResult> {
-        // Reaproveita o pipeline de `getCatalog`. Não há cache
-        // persistente no Provider Engine — cada chamada faz
-        // `GET /models` no adapter.
-        return this.getCatalog();
+        throw deprecatedOpenCodeError("opencode.refreshCatalog");
       },
     },
     voice: {

@@ -206,7 +206,7 @@ const STEP_ICONS: Record<string, typeof ClipboardList> = {
 // Labels customizados por nome de step (para modo real)
 const CUSTOM_LABELS: Record<string, string> = {
   "Preparação": "Preparação",
-  "OpenCode": "OpenCode",
+  "Provider": "Provider",
   "Git / Diff": "Git / Diff",
   "Resultado": "Resultado",
 };
@@ -215,7 +215,7 @@ function getStepIcon(step: WorkflowStep): typeof ClipboardList {
   if (CUSTOM_LABELS[step.name]) {
     switch (step.name) {
       case "Preparação": return Search;
-      case "OpenCode": return Zap;
+      case "Provider": return Zap;
       case "Git / Diff": return GitBranch;
       case "Resultado": return FileCheck;
     }
@@ -362,7 +362,7 @@ export function ExecutionFlowCard({
             )}
           </div>
           <div>
-            <div className="text-[14px] font-semibold text-text-primary">Execução Real com OpenCode</div>
+            <div className="text-[14px] font-semibold text-text-primary">Execução real do Fluxora</div>
             <div className={`text-[12px] mt-0.5 font-medium ${
               run.status === "running" ? "text-accent" :
               run.status === "completed" ? "text-success" :

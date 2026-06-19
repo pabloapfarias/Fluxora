@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type {
+  FluxoraEvent,
   WorkflowEvent,
   WorkflowRun,
   BackgroundWorkflowJob,
@@ -54,9 +55,32 @@ function appendStreamEvent(
   setEvents((current) => appendEvent(current, event).slice(-50));
 }
 
+function workflowEventFromFluxora(event: FluxoraEvent): WorkflowEvent | null {
+  const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : null;
+  const workflowRunId =
+    (typeof payload?.workflowRunId === "string" && payload.workflowRunId) ||
+    (typeof event.missionId === "string" && event.missionId) ||
+    undefined;
+  const message =
+    event.message ||
+    (typeof payload?.delta === "string" ? payload.delta : undefined) ||
+    event.type;
+  const normalized = normalizeLogText(message);
+  if (!normalized) return null;
+  return {
+    id: event.id,
+    workflowRunId,
+    projectId: event.projectId,
+    type: event.type,
+    message: normalized,
+    metadata: payload ? JSON.stringify(payload) : undefined,
+    createdAt: event.timestamp,
+  };
+}
+
 /**
  * Hook that registers IPC listeners for real-time execution events,
- * manages active run/job state, and extracts OpenCode text responses.
+ * manages active run/job state, and extracts streaming text responses.
  *
  * @param projectId - When provided, only events belonging to this project are kept.
  */
@@ -121,40 +145,36 @@ export function useLiveExecutionEvents(projectId?: string | null): UseLiveExecut
       });
     });
 
-    const unsubscribeStdout = window.fluxora.events.onOpenCodeStdout((payload) => {
-      appendStreamEvent(payload.workflowRunId, `STDOUT: ${payload.chunk}`, "opencode.stdout", setEvents);
-    });
-
-    const unsubscribeStderr = window.fluxora.events.onOpenCodeStderr((payload) => {
-      appendStreamEvent(payload.workflowRunId, `STDERR: ${payload.chunk}`, "opencode.stderr", setEvents);
-    });
-
-    const unsubscribeJson = window.fluxora.events.onOpenCodeJsonEvent((payload) => {
-      appendStreamEvent(payload.workflowRunId, JSON.stringify(payload.event), "opencode.json_event", setEvents);
-
-      // Extract text responses from OpenCode json events
-      const evt = payload.event as Record<string, unknown> | undefined;
-      if (evt && typeof evt === "object" && evt.type === "text" && typeof evt.text === "string") {
-        const text = evt.text.trim();
-        if (text) {
-          responseCounter.current += 1;
-          const response: OpenCodeResponse = {
-            id: `oc-resp-${responseCounter.current}-${Date.now()}`,
-            workflowRunId: payload.workflowRunId,
-            text,
-            createdAt: new Date().toISOString(),
-          };
-          setOpencodeResponses((prev) => [...prev, response]);
-        }
+    const unsubscribeStream = window.fluxora.events.subscribe((event) => {
+      const mapped = workflowEventFromFluxora(event);
+      if (mapped && shouldKeepEvent(mapped)) {
+        setEvents((current) => appendEvent(current, mapped).slice(-50));
       }
+
+      if (event.type !== "agent/step-chunk" && event.type !== "provider/stream-chunk") return;
+      const payload = event.payload as Record<string, unknown> | undefined;
+      const text = typeof payload?.delta === "string" ? payload.delta.trim() : "";
+      const workflowRunId =
+        typeof payload?.workflowRunId === "string"
+          ? payload.workflowRunId
+          : typeof event.missionId === "string"
+            ? event.missionId
+            : "";
+      if (!text || !workflowRunId) return;
+      responseCounter.current += 1;
+      const response: OpenCodeResponse = {
+        id: `stream-resp-${responseCounter.current}-${Date.now()}`,
+        workflowRunId,
+        text,
+        createdAt: new Date().toISOString(),
+      };
+      setOpencodeResponses((prev) => [...prev, response]);
     });
 
     return () => {
       unsubscribeEvents();
       unsubscribeJobs();
-      unsubscribeStdout();
-      unsubscribeStderr();
-      unsubscribeJson();
+      unsubscribeStream();
     };
   }, [shouldKeepEvent]);
 

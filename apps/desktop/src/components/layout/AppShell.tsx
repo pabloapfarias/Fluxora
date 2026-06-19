@@ -22,6 +22,7 @@ import { ShortcutHelpOverlay } from "../help/ShortcutHelpOverlay";
 import { FirstRunOnboarding, FIRST_RUN_ONBOARDING_KEY } from "../help/FirstRunOnboarding";
 import { CommandPalette, type CommandPaletteAction, type CommandPaletteUniversalItem } from "../help/CommandPalette";
 import { useCommandPaletteHistory } from "../../hooks/useCommandPaletteHistory";
+import { loadProviderCatalog } from "../../lib/providerCatalog";
 
 interface AppShellProps {
   children: ReactNode;
@@ -68,12 +69,13 @@ export function AppShell({ children }: AppShellProps) {
     Promise.all([
       window.fluxora.projects.list(),
       window.fluxora.workflows.list(),
-      window.fluxora.agents.list(),
+      window.fluxora.agents.listConfigs(),
       window.fluxora.approvals.listPending(),
-      window.fluxora.opencode.getCatalog(),
+      window.fluxora.providers.list(),
     ])
-      .then(([projectList, executionList, agentList, approvalList, catalogResult]) => {
+      .then(async ([projectList, executionList, agentList, approvalList, providers]) => {
         if (!mounted) return;
+        const catalogResult = await loadProviderCatalog(providers);
         setProjects(projectList);
         setExecutions(
           executionList.slice(0, 8).map((run) => ({
@@ -84,7 +86,16 @@ export function AppShell({ children }: AppShellProps) {
             createdAt: run.createdAt,
           }))
         );
-        setAgents(agentList);
+        setAgents(
+          agentList.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+            role: agent.role,
+            enabled: agent.status === "enabled",
+            modelProviderId: agent.providerId,
+            modelName: agent.model,
+          }))
+        );
         setApprovals(approvalList);
         setCatalog(catalogResult);
       })
@@ -208,7 +219,7 @@ export function AppShell({ children }: AppShellProps) {
     {
       id: "go-settings",
       title: "Ir para Configurações",
-      description: "Abre providers, OpenCode, fallback global e áudio.",
+      description: "Abre providers, fallback global, voz e permissões.",
       keywords: ["settings", "configurações", "fallback"],
       aliases: ["gs", "g s"],
       icon: <Settings size={14} />,
