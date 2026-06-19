@@ -30,6 +30,9 @@ import type {
   FluxoraEventLevel,
   FluxoraEventSource,
   GitInspectionResult,
+  GitCommitRequest,
+  GitCommitResult,
+  GitCommitReadiness,
   MissionExecutionReadiness,
   MissionJob,
   MissionLog,
@@ -2266,6 +2269,27 @@ export function createDesktopBridge(): FluxoraAPI {
       },
       async diff(projectId: string, filePath: string): Promise<string> {
         return diffProjectFile(mock, projectId, filePath);
+      },
+      async getWriteReadiness(input: { projectId: string; patchProposalId?: string }): Promise<GitCommitReadiness> {
+        return invokeOrFallback<GitCommitReadiness>(
+          "git_get_write_readiness",
+          input,
+          async () => mock.git.getWriteReadiness(input)
+        );
+      },
+      async commitPatch(input: GitCommitRequest): Promise<GitCommitResult> {
+        return invokeOrFallback<GitCommitResult>(
+          "git_commit_patch",
+          input as unknown as Record<string, unknown>,
+          async () => mock.git.commitPatch(input)
+        );
+      },
+      async listMissionCommits(missionId: string): Promise<GitCommitResult[]> {
+        return invokeOrFallback<GitCommitResult[]>(
+          "git_list_mission_commits",
+          { missionId },
+          async () => mock.git.listMissionCommits(missionId)
+        );
       },
       // PR 010 — `changedFiles(workflowRunId)` e
       // `fileDiff(workflowRunId, filePath)` agora são

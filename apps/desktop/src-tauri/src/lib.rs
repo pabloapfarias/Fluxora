@@ -19,6 +19,7 @@ use filesystem::{
 };
 use git::{
     GitAppInfo, GitChangedFile, GitCommitInfo, GitCommitsOptions, GitSummary,
+    GitCommitResultRecord, GitCommitsState, GitWriteReadiness,
 };
 use missions::{
     CancelMissionJobPayload, CreateMissionPayload, MissionJobRecord, MissionLogRecord,
@@ -249,6 +250,65 @@ async fn git_summary(app: AppHandle, project_id: String) -> Result<GitSummary, S
 #[tauri::command]
 async fn app_get_git_info() -> GitAppInfo {
     git::app_get_git_info()
+}
+
+#[tauri::command]
+async fn git_get_write_readiness(
+    app: AppHandle,
+    project_id: String,
+    patch_proposal_id: Option<String>,
+) -> Result<GitWriteReadiness, String> {
+    git::git_get_write_readiness(app, project_id, patch_proposal_id)
+}
+
+#[tauri::command]
+async fn git_create_branch_for_mission(
+    app: AppHandle,
+    project_id: String,
+    branch_name: String,
+) -> Result<String, String> {
+    git::git_create_branch_for_mission(app, project_id, branch_name)
+}
+
+#[tauri::command]
+async fn git_commit_patch(
+    app: AppHandle,
+    project_id: String,
+    mission_id: Option<String>,
+    patch_proposal_id: Option<String>,
+    create_branch: Option<bool>,
+    branch_name: Option<String>,
+    message: String,
+    files: Vec<String>,
+    approval_id: Option<String>,
+) -> Result<GitCommitResultRecord, String> {
+    git::git_commit_patch(
+        app,
+        project_id,
+        mission_id,
+        patch_proposal_id,
+        create_branch,
+        branch_name,
+        message,
+        files,
+        approval_id,
+    )
+}
+
+#[tauri::command]
+async fn git_get_commit_result(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<GitCommitResultRecord>, String> {
+    git::git_get_commit_result(app, id)
+}
+
+#[tauri::command]
+async fn git_list_mission_commits(
+    app: AppHandle,
+    mission_id: String,
+) -> Result<Vec<GitCommitResultRecord>, String> {
+    git::git_list_mission_commits(app, mission_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -871,6 +931,7 @@ pub fn run() {
         .manage(permissions::PermissionsState::new())
         .manage(approvals::ApprovalsState::new())
         .manage(patches::PatchesState::new())
+        .manage(GitCommitsState::new())
         .manage(agents::AgentsState::new())
         .setup(|app| {
             // PR 006 — Carrega `voice.json` salvo no app data dir.
@@ -905,6 +966,9 @@ pub fn run() {
             // vazio até o primeiro acesso). Cria os 4 agentes
             // padrão sob demanda na primeira chamada.
             agents::load_agents_on_startup(&handle);
+
+            // PR 016 — Carrega git_commits.json no startup
+            git::load_git_commits_on_startup(&handle);
 
             // Emite o evento `app/ready` no barramento assim que o
             // shell Tauri está pronto. Este é o primeiro evento real
@@ -946,6 +1010,11 @@ pub fn run() {
             git_recent_commits,
             git_diff,
             git_summary,
+            git_get_write_readiness,
+            git_create_branch_for_mission,
+            git_commit_patch,
+            git_get_commit_result,
+            git_list_mission_commits,
             app_get_git_info,
             voice_ping,
             voice_get_settings,

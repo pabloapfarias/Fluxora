@@ -1595,6 +1595,47 @@ export interface GitInspectionResult {
   error?: string;
 }
 
+export type GitCommitStatus =
+  | "not_requested"
+  | "pending_approval"
+  | "committed"
+  | "failed"
+  | "skipped";
+
+export interface GitCommitRequest {
+  projectId: string;
+  missionId?: string;
+  patchProposalId?: string;
+  createBranch?: boolean;
+  branchName?: string;
+  message: string;
+  files: string[];
+  approvalId?: string;
+}
+
+export interface GitCommitResult {
+  id: string;
+  projectId: string;
+  missionId?: string;
+  patchProposalId?: string;
+  branch?: string;
+  commitHash?: string;
+  files: string[];
+  status: GitCommitStatus;
+  message?: string;
+  error?: string;
+  createdAt: string;
+  approvalId?: string;
+}
+
+export interface GitCommitReadiness {
+  isRepo: boolean;
+  currentBranch?: string;
+  hasUncommittedChanges: boolean;
+  hasOutsideChanges: boolean;
+  preExistingWarning?: string;
+}
+
 export interface SelectDirectoryResult {
   canceled: boolean;
   path?: string;
@@ -2741,6 +2782,9 @@ export interface FluxoraAPI {
     diff(projectId: string, filePath: string): Promise<string>;
     changedFiles(workflowRunId: string): Promise<ChangedFile[]>;
     fileDiff(workflowRunId: string, filePath: string): Promise<FileDiff | null>;
+    getWriteReadiness(input: { projectId: string; patchProposalId?: string }): Promise<GitCommitReadiness>;
+    commitPatch(input: GitCommitRequest): Promise<GitCommitResult>;
+    listMissionCommits(missionId: string): Promise<GitCommitResult[]>;
   };
   settings: {
     get(key: string): Promise<string | null>;

@@ -25,6 +25,8 @@ import type {
   WorkflowEvent,
   WorkflowRunDetail,
   WorkflowRerunInput,
+  PatchProposal,
+  GitCommitResult,
 } from "@fluxora/shared";
 import { validateApprovalContext } from "@fluxora/shared";
 import { ExecutionFlowCard } from "../components/overview/ExecutionFlowCard";
@@ -58,6 +60,9 @@ export function ExecutionDetailPage() {
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [approvalActionLoading, setApprovalActionLoading] = useState<"approve" | "reject" | null>(null);
   const [rerunModalOpen, setRerunModalOpen] = useState(false);
+  const [proposals, setProposals] = useState<PatchProposal[]>([]);
+  const [commits, setCommits] = useState<GitCommitResult[]>([]);
+  const [commitModalOpen, setCommitModalOpen] = useState(false);
 
   useEffect(() => {
     const qTab = searchParams.get("tab") as DetailTab;
@@ -78,6 +83,11 @@ export function ExecutionDetailPage() {
 
   const isMultiAgent = detail?.realStrategy === "multi_agent";
   const isReal = detail?.executionMode === "real";
+
+  const appliedProposal = useMemo(() => proposals.find((p) => p.status === "applied"), [proposals]);
+  const commitInfo = useMemo(() => appliedProposal ? commits.find((c) => c.patchProposalId === appliedProposal.id && c.status === "committed") : null, [appliedProposal, commits]);
+  const pendingCommitInfo = useMemo(() => appliedProposal ? commits.find((c) => c.patchProposalId === appliedProposal.id && c.status === "pending_approval") : null, [appliedProposal, commits]);
+  const failedCommitInfo = useMemo(() => appliedProposal ? commits.find((c) => c.patchProposalId === appliedProposal.id && c.status === "failed") : null, [appliedProposal, commits]);
 
   // Extrair erros dos eventos
   const errorEvents = useMemo(() => {
@@ -161,6 +171,24 @@ export function ExecutionDetailPage() {
       if (found) setApproval(found);
     } catch {
       // noop
+    }
+
+    try {
+      if (window.fluxora.patches?.listByMission) {
+        const props = await window.fluxora.patches.listByMission(workflowId);
+        setProposals(props);
+      }
+    } catch (e) {
+      console.warn("Failed to load patches", e);
+    }
+
+    try {
+      if (window.fluxora.git?.listMissionCommits) {
+        const comms = await window.fluxora.git.listMissionCommits(workflowId);
+        setCommits(comms);
+      }
+    } catch (e) {
+      console.warn("Failed to load commits", e);
     }
   }
 
@@ -312,6 +340,20 @@ export function ExecutionDetailPage() {
         />
       )}
 
+      {commitModalOpen && detail && appliedProposal && (
+        <CommitModal
+          projectId={detail.projectId || ""}
+          missionId={detail.id}
+          patchProposalId={appliedProposal.id}
+          patchFiles={appliedProposal.files.map(f => f.path)}
+          missionTitle={detail.title}
+          onClose={() => setCommitModalOpen(false)}
+          onSuccess={(result) => {
+            setCommits(prev => [...prev.filter(c => c.id !== result.id), result]);
+          }}
+        />
+      )}
+
       {/* Visual execution timeline */}
       <ExecutionFlowCard
         run={detail}
@@ -402,6 +444,60 @@ export function ExecutionDetailPage() {
               </div>
               <p className="text-sm bg-bg-primary p-3 rounded-lg font-mono">{detail.prompt}</p>
             </div>
+
+            {/* Git controlled local commit section (PR 016) */}
+            {appliedProposal && (
+              <div className="mt-4 border-t border-border-subtle pt-4 space-y-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-muted">
+                  Alterações aplicadas
+                </div>
+                <div className="bg-bg-deep/40 border border-border-subtle rounded-lg p-4 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="text-[13px] font-medium text-text-primary">
+                        Arquivos criados/modificados: {appliedProposal.files.length}
+                      </div>
+                      <div className="text-[12px] text-text-secondary">
+                        {commitInfo ? (
+                          <span className="flex items-center gap-1.5 text-success">
+                            Commit local criado: <span className="font-mono bg-success/15 px-1 py-px rounded">{commitInfo.commitHash?.slice(0, 7)}</span>
+                            {commitInfo.branch && (
+                              <span className="text-text-muted">
+                                (Branch: <span className="font-mono text-text-secondary">{commitInfo.branch}</span>)
+                              </span>
+                            )}
+                          </span>
+                        ) : pendingCommitInfo ? (
+                          <span className="flex items-center gap-1.5 text-warning animate-pulse">
+                            Commit local aguardando aprovação... (ID: {pendingCommitInfo.approvalId?.slice(0, 10)})
+                          </span>
+                        ) : failedCommitInfo ? (
+                          <span className="flex flex-col gap-1 text-error">
+                            <span>Falha ao criar commit local: {failedCommitInfo.error}</span>
+                            <button
+                              onClick={() => setCommitModalOpen(true)}
+                              className="text-[11px] text-accent hover:underline text-left mt-0.5"
+                            >
+                              Tentar novamente
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="text-text-muted">Commit local: não criado</span>
+                        )}
+                      </div>
+                    </div>
+                    {!commitInfo && !pendingCommitInfo && (
+                      <button
+                        onClick={() => setCommitModalOpen(true)}
+                        className="no-drag flux-btn-secondary h-8 px-3 text-[12px]"
+                      >
+                        Criar commit local
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1226,6 +1322,178 @@ function RerunModal({
           >
             <RotateCcw size={14} />
             Reexecutar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CommitModal({
+  projectId,
+  missionId,
+  patchProposalId,
+  patchFiles,
+  missionTitle,
+  onClose,
+  onSuccess,
+}: {
+  projectId: string;
+  missionId: string;
+  patchProposalId: string;
+  patchFiles: string[];
+  missionTitle: string;
+  onClose: () => void;
+  onSuccess: (result: any) => void;
+}) {
+  const [createBranch, setCreateBranch] = useState(true);
+  const [branchName, setBranchName] = useState(`fluxora/mission-${missionId.slice(0, 8)}`);
+  const [message, setMessage] = useState(`feat: apply Fluxora mission ${missionTitle}`);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function checkReadiness() {
+      try {
+        const readiness = await window.fluxora.git.getWriteReadiness({ projectId, patchProposalId });
+        if (readiness.preExistingWarning) {
+          setWarning(readiness.preExistingWarning);
+        }
+      } catch (err: any) {
+        console.error(err);
+      }
+    }
+    checkReadiness();
+  }, [projectId, patchProposalId]);
+
+  async function handleCreateCommit() {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await window.fluxora.git.commitPatch({
+        projectId,
+        missionId,
+        patchProposalId,
+        createBranch,
+        branchName: createBranch ? branchName : undefined,
+        message,
+        files: patchFiles,
+      });
+
+      if (result.status === "failed") {
+        setError(result.error || "Falha ao criar o commit.");
+      } else {
+        onSuccess(result);
+        onClose();
+      }
+    } catch (err: any) {
+      setError(err?.message || err || "Erro ao criar commit.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Criar commit local"
+      onClick={onClose}
+    >
+      <div
+        className="bg-bg-card border border-border rounded-xl shadow-2xl max-w-lg w-full overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border-subtle">
+          <div className="flex items-center gap-2">
+            <h2 className="text-[14px] font-semibold text-text-primary">Criar commit local</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-text-muted hover:text-text-primary p-1 rounded hover:bg-bg-elevated"
+            aria-label="Fechar"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {error && (
+            <div className="rounded-lg border border-error/30 bg-error/10 p-3 text-[12px] text-error">
+              {error}
+            </div>
+          )}
+
+          {warning && (
+            <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-[12px] text-warning">
+              {warning}
+            </div>
+          )}
+
+          <div className="rounded-lg border border-border-subtle bg-bg-deep/40 p-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={createBranch}
+                onChange={(e) => setCreateBranch(e.target.checked)}
+                className="accent-[var(--accent)]"
+              />
+              <span className="text-[12.5px] font-medium text-text-primary">
+                Criar branch local para a missão
+              </span>
+            </label>
+
+            {createBranch && (
+              <div className="mt-3 space-y-1.5">
+                <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-muted">
+                  Nome da branch
+                </label>
+                <input
+                  type="text"
+                  value={branchName}
+                  onChange={(e) => setBranchName(e.target.value)}
+                  className="no-drag w-full bg-bg-primary border border-border-subtle rounded-lg px-3 py-2 text-[12.5px] font-mono text-text-primary focus:outline-none focus:border-accent/50"
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-text-muted">
+              Mensagem do commit
+            </label>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              rows={2}
+              className="no-drag w-full bg-bg-primary border border-border-subtle rounded-lg p-3 text-[12.5px] font-mono text-text-primary focus:outline-none focus:border-accent/50 resize-y"
+            />
+          </div>
+
+          <div className="text-[11px] text-text-muted">
+            Arquivos a serem commitados ({patchFiles.length}):
+            <div className="max-h-24 overflow-y-auto mt-1 p-2 rounded bg-bg-deep/40 border border-border-subtle font-mono text-[10px] space-y-0.5">
+              {patchFiles.map((file) => (
+                <div key={file} className="text-text-secondary truncate">
+                  + {file}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border-subtle bg-bg-deep/20">
+          <button onClick={onClose} className="no-drag flux-btn-ghost h-9 px-3 text-[12px]" disabled={loading}>
+            Cancelar
+          </button>
+          <button
+            onClick={handleCreateCommit}
+            className="no-drag flux-btn-primary h-9 px-4 text-[12px] flex items-center gap-1.5"
+            disabled={loading}
+          >
+            {loading ? "Criando..." : "Criar commit local"}
           </button>
         </div>
       </div>

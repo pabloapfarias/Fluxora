@@ -500,6 +500,43 @@ pub fn approvals_approve(
                 }
             }
         }
+    } else if updated.action == "commit" {
+        let payload_obj = updated.payload.as_ref();
+        let project_id = payload_obj.and_then(|p| p.get("projectId")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let mission_id = payload_obj.and_then(|p| p.get("missionId")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let patch_proposal_id = payload_obj.and_then(|p| p.get("patchProposalId")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let create_branch = payload_obj.and_then(|p| p.get("createBranch")).and_then(|v| v.as_bool());
+        let branch_name = payload_obj.and_then(|p| p.get("branchName")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let message = payload_obj.and_then(|p| p.get("message")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let files: Option<Vec<String>> = payload_obj
+            .and_then(|p| p.get("files"))
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|val| val.as_str().map(|s| s.to_string())).collect());
+
+        if let (Some(pid), Some(msg), Some(fls)) = (project_id, message, files) {
+            match crate::git::git_commit_patch(
+                app.clone(),
+                pid,
+                mission_id,
+                patch_proposal_id,
+                create_branch,
+                branch_name,
+                msg,
+                fls,
+                Some(updated.id.clone()),
+            ) {
+                Ok(_) => {
+                    eprintln!(
+                        "[fluxora approvals] git_commit_patch disparado a partir de approval/approved (approval={id})"
+                    );
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[fluxora approvals] git_commit_patch falhou após approval/approved: {error}"
+                    );
+                }
+            }
+        }
     }
     Ok(updated)
 }

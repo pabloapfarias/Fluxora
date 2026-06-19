@@ -19,6 +19,7 @@ import type {
   PatchProposal, CreatePatchProposalInput, ApplyPatchInput,
   AgentConfig, CreateAgentConfigInput, UpdateAgentConfigInput,
   AgentStepRecord, MissionExecutionReadiness,
+  GitCommitStatus, GitCommitRequest, GitCommitResult, GitCommitReadiness,
 } from "@fluxora/shared";
 import { buildVoiceContext } from "@fluxora/voice-context";
 
@@ -1153,6 +1154,30 @@ export function createMockAPI(): FluxoraAPI {
       fileDiff: async (workflowRunId: string, filePath: string) => {
         const list = fileDiffsByWorkflow.get(workflowRunId) || [];
         return list.find((d) => d.filePath === filePath) || null;
+      },
+      getWriteReadiness: async (input: { projectId: string; patchProposalId?: string }): Promise<GitCommitReadiness> => {
+        return {
+          isRepo: true,
+          currentBranch: "main",
+          hasUncommittedChanges: true,
+          hasOutsideChanges: false,
+        };
+      },
+      commitPatch: async (input: GitCommitRequest): Promise<GitCommitResult> => {
+        return {
+          id: "git-commit-mock-id",
+          projectId: input.projectId,
+          missionId: input.missionId,
+          patchProposalId: input.patchProposalId,
+          branch: input.branchName || "fluxora/mission-mock",
+          commitHash: "mockhash1234567890abcdef",
+          files: input.files,
+          status: "committed",
+          createdAt: new Date().toISOString(),
+        };
+      },
+      listMissionCommits: async (missionId: string): Promise<GitCommitResult[]> => {
+        return [];
       },
     },
     settings: {
