@@ -775,6 +775,9 @@ pub fn patches_create(
         updated_at: now,
         applied_at: None,
         error: None,
+        files_written: None,
+        files_missing: None,
+        project_path: None,
     };
     let state = app.state::<PatchesState>();
     let stored = upsert_proposal(&state, proposal);
