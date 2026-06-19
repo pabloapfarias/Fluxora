@@ -81,17 +81,17 @@ async fn projects_select_directory(app: AppHandle) -> Result<SelectDirectoryResu
 }
 
 #[tauri::command]
-fn projects_list(app: AppHandle) -> Result<Vec<projects::ProjectResponse>, String> {
+async fn projects_list(app: AppHandle) -> Result<Vec<projects::ProjectResponse>, String> {
     projects::list(&app)
 }
 
 #[tauri::command]
-fn projects_get(app: AppHandle, id: String) -> Result<Option<projects::ProjectResponse>, String> {
+async fn projects_get(app: AppHandle, id: String) -> Result<Option<projects::ProjectResponse>, String> {
     projects::get(&app, id)
 }
 
 #[tauri::command]
-fn projects_create(app: AppHandle, payload: CreateProjectPayload) -> Result<projects::ProjectResponse, String> {
+async fn projects_create(app: AppHandle, payload: CreateProjectPayload) -> Result<projects::ProjectResponse, String> {
     let response = projects::create(&app, payload)?;
     // Emite o evento real `project/updated` no barramento.
     // O frontend decide se quer reagir (a UI atual ignora por enquanto).
@@ -110,7 +110,7 @@ fn projects_create(app: AppHandle, payload: CreateProjectPayload) -> Result<proj
 }
 
 #[tauri::command]
-fn projects_update(
+async fn projects_update(
     app: AppHandle,
     id: String,
     payload: UpdateProjectPayload,
@@ -131,7 +131,7 @@ fn projects_update(
 }
 
 #[tauri::command]
-fn projects_remove(app: AppHandle, id: String) -> Result<(), String> {
+async fn projects_remove(app: AppHandle, id: String) -> Result<(), String> {
     projects::remove(&app, id.clone())?;
     // `remove` não devolve o projeto; emitimos apenas com o `id`.
     let event = events::build_event(
@@ -149,7 +149,7 @@ fn projects_remove(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn projects_validate_path(project_path: String) -> projects::ValidatePathResult {
+async fn projects_validate_path(project_path: String) -> projects::ValidatePathResult {
     projects::validate_path(project_path)
 }
 
@@ -158,7 +158,7 @@ fn projects_validate_path(project_path: String) -> projects::ValidatePathResult 
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn fs_list_files(
+async fn fs_list_files(
     app: AppHandle,
     project_id: String,
     relative_path: Option<String>,
@@ -168,7 +168,7 @@ fn fs_list_files(
 }
 
 #[tauri::command]
-fn fs_read_file(
+async fn fs_read_file(
     app: AppHandle,
     project_id: String,
     relative_path: String,
@@ -178,7 +178,7 @@ fn fs_read_file(
 }
 
 #[tauri::command]
-fn fs_get_file_info(
+async fn fs_get_file_info(
     app: AppHandle,
     project_id: String,
     relative_path: Option<String>,
@@ -187,7 +187,7 @@ fn fs_get_file_info(
 }
 
 #[tauri::command]
-fn fs_search_files(
+async fn fs_search_files(
     app: AppHandle,
     project_id: String,
     query: String,
@@ -197,7 +197,7 @@ fn fs_search_files(
 }
 
 #[tauri::command]
-fn fs_list_project_tree(
+async fn fs_list_project_tree(
     app: AppHandle,
     project_id: String,
     options: Option<FsTreeOptions>,
@@ -210,12 +210,12 @@ fn fs_list_project_tree(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn git_is_repo(app: AppHandle, project_id: String) -> Result<bool, String> {
+async fn git_is_repo(app: AppHandle, project_id: String) -> Result<bool, String> {
     git::git_is_repo(app, project_id)
 }
 
 #[tauri::command]
-fn git_current_branch(
+async fn git_current_branch(
     app: AppHandle,
     project_id: String,
 ) -> Result<Option<String>, String> {
@@ -223,12 +223,12 @@ fn git_current_branch(
 }
 
 #[tauri::command]
-fn git_status(app: AppHandle, project_id: String) -> Result<Vec<GitChangedFile>, String> {
+async fn git_status(app: AppHandle, project_id: String) -> Result<Vec<GitChangedFile>, String> {
     git::git_status(app, project_id)
 }
 
 #[tauri::command]
-fn git_recent_commits(
+async fn git_recent_commits(
     app: AppHandle,
     project_id: String,
     options: Option<GitCommitsOptions>,
@@ -237,17 +237,17 @@ fn git_recent_commits(
 }
 
 #[tauri::command]
-fn git_diff(app: AppHandle, project_id: String, file_path: String) -> Result<String, String> {
+async fn git_diff(app: AppHandle, project_id: String, file_path: String) -> Result<String, String> {
     git::git_diff(app, project_id, file_path)
 }
 
 #[tauri::command]
-fn git_summary(app: AppHandle, project_id: String) -> Result<GitSummary, String> {
+async fn git_summary(app: AppHandle, project_id: String) -> Result<GitSummary, String> {
     git::git_summary(app, project_id)
 }
 
 #[tauri::command]
-fn app_get_git_info() -> GitAppInfo {
+async fn app_get_git_info() -> GitAppInfo {
     git::app_get_git_info()
 }
 
@@ -261,12 +261,12 @@ fn voice_ping() -> String {
 }
 
 #[tauri::command]
-fn voice_get_settings(app: AppHandle) -> Result<voice::StoredAudioSettings, String> {
+async fn voice_get_settings(app: AppHandle) -> Result<voice::StoredAudioSettings, String> {
     voice::voice_get_settings(app)
 }
 
 #[tauri::command]
-fn voice_update_settings(
+async fn voice_update_settings(
     app: AppHandle,
     payload: UpdateSettingsPayload,
 ) -> Result<voice::StoredAudioSettings, String> {
@@ -274,7 +274,7 @@ fn voice_update_settings(
 }
 
 #[tauri::command]
-fn voice_transcribe(
+async fn voice_transcribe(
     app: AppHandle,
     payload: TranscribePayload,
 ) -> Result<VoiceTranscriptionResult, String> {
@@ -282,7 +282,7 @@ fn voice_transcribe(
 }
 
 #[tauri::command]
-fn voice_test_provider(app: AppHandle) -> Result<VoiceProviderTestResult, String> {
+async fn voice_test_provider(app: AppHandle) -> Result<VoiceProviderTestResult, String> {
     voice::voice_test_provider(app)
 }
 
@@ -296,7 +296,7 @@ fn events_ping() -> String {
 }
 
 #[tauri::command]
-fn events_emit_diagnostic(
+async fn events_emit_diagnostic(
     app: AppHandle,
     input: EmitDiagnosticInput,
 ) -> Result<FluxoraEvent, String> {
@@ -304,7 +304,7 @@ fn events_emit_diagnostic(
 }
 
 #[tauri::command]
-fn events_list_recent(
+async fn events_list_recent(
     app: AppHandle,
     input: Option<ListRecentInput>,
 ) -> Result<Vec<FluxoraEvent>, String> {
@@ -312,7 +312,7 @@ fn events_list_recent(
 }
 
 #[tauri::command]
-fn events_clear_recent(app: AppHandle) -> Result<(), String> {
+async fn events_clear_recent(app: AppHandle) -> Result<(), String> {
     events::events_clear_recent(app)
 }
 
@@ -326,17 +326,17 @@ fn providers_ping() -> String {
 }
 
 #[tauri::command]
-fn providers_list(app: AppHandle) -> Result<Vec<StoredProvider>, String> {
+async fn providers_list(app: AppHandle) -> Result<Vec<StoredProvider>, String> {
     providers::providers_list(app)
 }
 
 #[tauri::command]
-fn providers_get(app: AppHandle, id: String) -> Result<Option<StoredProvider>, String> {
+async fn providers_get(app: AppHandle, id: String) -> Result<Option<StoredProvider>, String> {
     providers::providers_get(app, id)
 }
 
 #[tauri::command]
-fn providers_create(
+async fn providers_create(
     app: AppHandle,
     payload: CreateProviderPayload,
 ) -> Result<StoredProvider, String> {
@@ -344,7 +344,7 @@ fn providers_create(
 }
 
 #[tauri::command]
-fn providers_update(
+async fn providers_update(
     app: AppHandle,
     id: String,
     payload: UpdateProviderPayload,
@@ -353,12 +353,12 @@ fn providers_update(
 }
 
 #[tauri::command]
-fn providers_remove(app: AppHandle, id: String) -> Result<(), String> {
+async fn providers_remove(app: AppHandle, id: String) -> Result<(), String> {
     providers::providers_remove(app, id)
 }
 
 #[tauri::command]
-fn providers_test(
+async fn providers_test(
     app: AppHandle,
     id: String,
 ) -> Result<ProviderTestResultPayload, String> {
@@ -366,7 +366,7 @@ fn providers_test(
 }
 
 #[tauri::command]
-fn providers_list_models(
+async fn providers_list_models(
     app: AppHandle,
     id: String,
 ) -> Result<Vec<providers::ModelInfo>, String> {
@@ -374,7 +374,7 @@ fn providers_list_models(
 }
 
 #[tauri::command]
-fn providers_chat_once(
+async fn providers_chat_once(
     app: AppHandle,
     payload: ChatOncePayload,
 ) -> Result<ChatOnceResultPayload, String> {
@@ -386,7 +386,7 @@ fn providers_chat_once(
 // `provider/stream-*`); este comando retorna apenas o
 // `ProviderStreamResultPayload` final consolidado.
 #[tauri::command]
-fn providers_chat_stream(
+async fn providers_chat_stream(
     app: AppHandle,
     payload: ChatStreamPayload,
 ) -> Result<ProviderStreamResultPayload, String> {
@@ -403,17 +403,17 @@ fn missions_ping() -> String {
 }
 
 #[tauri::command]
-fn missions_list(app: AppHandle) -> Result<Vec<MissionRecord>, String> {
+async fn missions_list(app: AppHandle) -> Result<Vec<MissionRecord>, String> {
     missions::missions_list(app)
 }
 
 #[tauri::command]
-fn missions_get(app: AppHandle, id: String) -> Result<Option<MissionRecord>, String> {
+async fn missions_get(app: AppHandle, id: String) -> Result<Option<MissionRecord>, String> {
     missions::missions_get(app, id)
 }
 
 #[tauri::command]
-fn missions_create(
+async fn missions_create(
     app: AppHandle,
     payload: CreateMissionPayload,
 ) -> Result<MissionRecord, String> {
@@ -421,7 +421,7 @@ fn missions_create(
 }
 
 #[tauri::command]
-fn missions_run(
+async fn missions_run(
     app: AppHandle,
     payload: RunMissionPayload,
 ) -> Result<MissionRecord, String> {
@@ -429,7 +429,7 @@ fn missions_run(
 }
 
 #[tauri::command]
-fn missions_create_and_run(
+async fn missions_create_and_run(
     app: AppHandle,
     payload: CreateMissionPayload,
 ) -> Result<MissionRecord, String> {
@@ -455,7 +455,7 @@ struct MissionReadinessPayload {
 /// diagnóstico da missão, a AgentsPage e o banner global sempre
 /// alinhados com o que será executado.
 #[tauri::command]
-fn missions_get_readiness(
+async fn missions_get_readiness(
     app: AppHandle,
     payload: MissionReadinessPayload,
 ) -> MissionExecutionReadiness {
@@ -471,7 +471,7 @@ fn missions_get_readiness(
 }
 
 #[tauri::command]
-fn missions_list_logs(
+async fn missions_list_logs(
     app: AppHandle,
     mission_id: String,
 ) -> Result<Vec<MissionLogRecord>, String> {
@@ -479,7 +479,7 @@ fn missions_list_logs(
 }
 
 #[tauri::command]
-fn missions_clear(app: AppHandle) -> Result<(), String> {
+async fn missions_clear(app: AppHandle) -> Result<(), String> {
     missions::missions_clear(app)
 }
 
@@ -493,7 +493,7 @@ fn permissions_ping() -> String {
 }
 
 #[tauri::command]
-fn permissions_get_project_policy(
+async fn permissions_get_project_policy(
     app: AppHandle,
     project_id: String,
 ) -> Result<ProjectExecutionPolicyRecord, String> {
@@ -501,7 +501,7 @@ fn permissions_get_project_policy(
 }
 
 #[tauri::command]
-fn permissions_update_project_policy(
+async fn permissions_update_project_policy(
     app: AppHandle,
     project_id: String,
     payload: UpdatePolicyPayload,
@@ -510,14 +510,14 @@ fn permissions_update_project_policy(
 }
 
 #[tauri::command]
-fn permissions_list_policies(
+async fn permissions_list_policies(
     app: AppHandle,
 ) -> Result<Vec<ProjectExecutionPolicyRecord>, String> {
     permissions::permissions_list_policies(app)
 }
 
 #[tauri::command]
-fn permissions_reset_project_policy(
+async fn permissions_reset_project_policy(
     app: AppHandle,
     project_id: String,
 ) -> Result<ProjectExecutionPolicyRecord, String> {
@@ -525,7 +525,7 @@ fn permissions_reset_project_policy(
 }
 
 #[tauri::command]
-fn permissions_check(
+async fn permissions_check(
     app: AppHandle,
     payload: PermissionCheckPayload,
 ) -> Result<PermissionCheckResultRecord, String> {
@@ -542,12 +542,12 @@ fn approvals_ping() -> String {
 }
 
 #[tauri::command]
-fn approvals_list(app: AppHandle) -> Result<Vec<ExecutionApprovalRecord>, String> {
+async fn approvals_list(app: AppHandle) -> Result<Vec<ExecutionApprovalRecord>, String> {
     approvals::approvals_list(app)
 }
 
 #[tauri::command]
-fn approvals_get(
+async fn approvals_get(
     app: AppHandle,
     id: String,
 ) -> Result<Option<ExecutionApprovalRecord>, String> {
@@ -555,7 +555,7 @@ fn approvals_get(
 }
 
 #[tauri::command]
-fn approvals_create(
+async fn approvals_create(
     app: AppHandle,
     payload: CreateApprovalPayload,
 ) -> Result<ExecutionApprovalRecord, String> {
@@ -563,7 +563,7 @@ fn approvals_create(
 }
 
 #[tauri::command]
-fn approvals_approve(
+async fn approvals_approve(
     app: AppHandle,
     id: String,
 ) -> Result<ExecutionApprovalRecord, String> {
@@ -571,7 +571,7 @@ fn approvals_approve(
 }
 
 #[tauri::command]
-fn approvals_reject(
+async fn approvals_reject(
     app: AppHandle,
     payload: RejectApprovalPayload,
 ) -> Result<ExecutionApprovalRecord, String> {
@@ -579,7 +579,7 @@ fn approvals_reject(
 }
 
 #[tauri::command]
-fn approvals_cancel(
+async fn approvals_cancel(
     app: AppHandle,
     payload: CancelApprovalPayload,
 ) -> Result<ExecutionApprovalRecord, String> {
@@ -587,7 +587,7 @@ fn approvals_cancel(
 }
 
 #[tauri::command]
-fn approvals_list_actionable(
+async fn approvals_list_actionable(
     app: AppHandle,
 ) -> Result<Vec<ExecutionApprovalRecord>, String> {
     approvals::approvals_list_actionable(app)
@@ -603,12 +603,12 @@ fn scheduler_ping() -> String {
 }
 
 #[tauri::command]
-fn scheduler_list_jobs(app: AppHandle) -> Result<Vec<MissionJobRecord>, String> {
+async fn scheduler_list_jobs(app: AppHandle) -> Result<Vec<MissionJobRecord>, String> {
     missions::scheduler_list_jobs(app)
 }
 
 #[tauri::command]
-fn scheduler_get_job(
+async fn scheduler_get_job(
     app: AppHandle,
     job_id: String,
 ) -> Result<Option<MissionJobRecord>, String> {
@@ -616,7 +616,7 @@ fn scheduler_get_job(
 }
 
 #[tauri::command]
-fn scheduler_cancel_job(
+async fn scheduler_cancel_job(
     app: AppHandle,
     payload: CancelMissionJobPayload,
 ) -> Result<Option<MissionJobRecord>, String> {
@@ -660,12 +660,12 @@ fn patches_ping() -> String {
 }
 
 #[tauri::command]
-fn patches_list(app: AppHandle) -> Result<Vec<PatchProposalRecord>, String> {
+async fn patches_list(app: AppHandle) -> Result<Vec<PatchProposalRecord>, String> {
     patches::patches_list(app)
 }
 
 #[tauri::command]
-fn patches_get(
+async fn patches_get(
     app: AppHandle,
     id: String,
 ) -> Result<Option<PatchProposalRecord>, String> {
@@ -673,7 +673,7 @@ fn patches_get(
 }
 
 #[tauri::command]
-fn patches_list_by_mission(
+async fn patches_list_by_mission(
     app: AppHandle,
     mission_id: String,
 ) -> Result<Vec<PatchProposalRecord>, String> {
@@ -681,7 +681,7 @@ fn patches_list_by_mission(
 }
 
 #[tauri::command]
-fn patches_create(
+async fn patches_create(
     app: AppHandle,
     payload: CreatePatchProposalPayload,
 ) -> Result<PatchProposalRecord, String> {
@@ -696,7 +696,7 @@ fn patches_create(
 }
 
 #[tauri::command]
-fn patches_apply(
+async fn patches_apply(
     app: AppHandle,
     payload: ApplyPatchPayload,
 ) -> Result<PatchProposalRecord, String> {
@@ -704,7 +704,7 @@ fn patches_apply(
 }
 
 #[tauri::command]
-fn patches_reject(
+async fn patches_reject(
     app: AppHandle,
     payload: RejectPatchPayload,
 ) -> Result<PatchProposalRecord, String> {
@@ -712,7 +712,7 @@ fn patches_reject(
 }
 
 #[tauri::command]
-fn patches_get_changed_files(
+async fn patches_get_changed_files(
     app: AppHandle,
     workflow_run_id: String,
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -720,7 +720,7 @@ fn patches_get_changed_files(
 }
 
 #[tauri::command]
-fn patches_get_file_diff(
+async fn patches_get_file_diff(
     app: AppHandle,
     workflow_run_id: String,
     file_path: String,
@@ -776,12 +776,12 @@ fn agents_ping() -> String {
 }
 
 #[tauri::command]
-fn agents_list(app: AppHandle) -> Result<Vec<AgentConfigRecord>, String> {
+async fn agents_list(app: AppHandle) -> Result<Vec<AgentConfigRecord>, String> {
     agents::agents_list(app)
 }
 
 #[tauri::command]
-fn agents_get(
+async fn agents_get(
     app: AppHandle,
     id: String,
 ) -> Result<Option<AgentConfigRecord>, String> {
@@ -789,7 +789,7 @@ fn agents_get(
 }
 
 #[tauri::command]
-fn agents_create(
+async fn agents_create(
     app: AppHandle,
     payload: CreateAgentPayload,
 ) -> Result<AgentConfigRecord, String> {
@@ -807,7 +807,7 @@ fn agents_create(
 }
 
 #[tauri::command]
-fn agents_update(
+async fn agents_update(
     app: AppHandle,
     id: String,
     payload: UpdateAgentPayload,
@@ -826,17 +826,17 @@ fn agents_update(
 }
 
 #[tauri::command]
-fn agents_remove(app: AppHandle, id: String) -> Result<(), String> {
+async fn agents_remove(app: AppHandle, id: String) -> Result<(), String> {
     agents::agents_remove(app, id)
 }
 
 #[tauri::command]
-fn agents_reset_defaults(app: AppHandle) -> Result<Vec<AgentConfigRecord>, String> {
+async fn agents_reset_defaults(app: AppHandle) -> Result<Vec<AgentConfigRecord>, String> {
     agents::agents_reset_defaults(app)
 }
 
 #[tauri::command]
-fn agent_steps_list(
+async fn agent_steps_list(
     app: AppHandle,
     mission_id: String,
 ) -> Result<Vec<AgentStepRecord>, String> {
@@ -844,7 +844,7 @@ fn agent_steps_list(
 }
 
 #[tauri::command]
-fn agent_steps_list_by_mission(
+async fn agent_steps_list_by_mission(
     app: AppHandle,
     mission_id: String,
 ) -> Result<Vec<AgentStepRecord>, String> {
@@ -852,7 +852,7 @@ fn agent_steps_list_by_mission(
 }
 
 #[tauri::command]
-fn agent_steps_get(
+async fn agent_steps_get(
     app: AppHandle,
     id: String,
 ) -> Result<Option<AgentStepRecord>, String> {

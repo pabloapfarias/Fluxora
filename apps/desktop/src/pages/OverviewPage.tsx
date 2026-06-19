@@ -715,6 +715,7 @@ export function OverviewPage() {
         executionMode={executionMode}
         events={events}
         onCancel={handleCancelActiveJob}
+        onSelectStep={(stepId) => activeRun?.id && navigate(`/executions/${activeRun.id}?tab=agentes&step=${stepId}`)}
       />
 
       {/* ─── Mission Result (compact card) ─── */}

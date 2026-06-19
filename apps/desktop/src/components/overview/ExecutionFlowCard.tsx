@@ -27,147 +27,175 @@ interface ExecutionFlowCardProps {
   executionMode?: string;
   events?: WorkflowEvent[];
   onCancel?: () => void;
+  onSelectStep?: (stepId: string) => void;
 }
 
-type StepState = "awaiting" | "running" | "completed" | "error";
+type StepState = "pending" | "running" | "completed" | "failed" | "skipped";
 
 function mapStepState(step: WorkflowStep | undefined): StepState {
-  if (!step) return "awaiting";
+  if (!step) return "pending";
   if (step.status === "completed") return "completed";
   if (step.status === "running") return "running";
-  if (step.status === "failed") return "error";
-  return "awaiting";
+  if (step.status === "failed") return "failed";
+  if (step.status === "cancelled") return "skipped";
+  return "pending";
 }
 
-function StepConnector({ state }: { state: StepState }) {
-  const isCompleted = state === "completed";
-  const isRunning = state === "running";
-
-  return (
-    <div className="flex items-center justify-center px-1 flex-shrink-0" aria-hidden="true">
-      <div className="relative flex items-center w-8 h-[2px]">
-        <div
-          className={`absolute inset-0 rounded-full transition-colors ${
-            isCompleted
-              ? "bg-success/40"
-              : isRunning
-              ? "bg-accent/40"
-              : "bg-border-subtle"
-          }`}
-        />
-        {isRunning && (
-          <div className="absolute inset-0 rounded-full bg-accent/60 animate-pulse" />
-        )}
-        <div
-          className={`absolute right-0 w-0 h-0 border-t-[4px] border-t-transparent border-b-[4px] border-b-transparent border-l-[6px] translate-x-[5px] ${
-            isCompleted
-              ? "border-l-success/60"
-              : isRunning
-              ? "border-l-accent/60"
-              : "border-l-text-muted/40"
-          }`}
-        />
-      </div>
-    </div>
-  );
+function getFriendlyRoleLabel(role?: string): string {
+  if (!role) return "Agente";
+  switch (role.toLowerCase()) {
+    case "planner": return "Planner";
+    case "developer": return "Developer";
+    case "qa": return "QA";
+    case "finalizer": return "Finalizer";
+    case "fixer": return "Fixer";
+    default: return role;
+  }
 }
 
 function StepCard({
   step,
   state,
+  onSelect,
 }: {
-  step: { label: string; number: number; icon: typeof ClipboardList; output?: string; startedAt?: string; completedAt?: string };
+  step: { id?: string; label: string; roleLabel: string; number: number; icon: typeof ClipboardList; output?: string; startedAt?: string; completedAt?: string };
   state: StepState;
+  onSelect?: () => void;
 }) {
   const Icon = step.icon;
   const isRunning = state === "running";
   const isCompleted = state === "completed";
-  const isError = state === "error";
-  const isAwaiting = state === "awaiting";
+  const isError = state === "failed";
+  const isAwaiting = state === "pending";
+  const isSkipped = state === "skipped";
 
   const stateClasses = {
-    running: {
-      card: "border-accent/35 bg-gradient-to-b from-accent-soft/18 to-bg-elevated/70 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]",
-      number: "bg-accent text-white",
-      icon: "text-accent",
-      label: "text-white",
-      status: "text-text-secondary",
-    },
-    completed: {
-      card: "border-success/30 bg-success-soft/20",
-      number: "bg-success text-white",
-      icon: "text-success",
-      label: "text-text-primary",
-      status: "text-success/80",
-    },
-    error: {
-      card: "border-error/30 bg-error-soft/20",
-      number: "bg-error text-white",
-      icon: "text-error",
-      label: "text-text-primary",
-      status: "text-error/80",
-    },
-    awaiting: {
-      card: "border-border-subtle bg-bg-elevated/30",
-      number: "bg-bg-input text-text-muted border border-border-subtle",
+    pending: {
+      card: "border-border-subtle bg-bg-elevated/20 opacity-60",
+      number: "bg-bg-input text-text-muted border border-border-subtle/50",
       icon: "text-text-muted",
       label: "text-text-secondary",
-      status: "text-text-muted",
+      statusText: "Pendente",
+      statusClass: "text-text-muted",
+    },
+    running: {
+      card: "border-accent/45 bg-gradient-to-b from-accent-soft/10 to-bg-elevated/70 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] ring-1 ring-accent/25",
+      number: "bg-accent text-white font-bold",
+      icon: "text-accent",
+      label: "text-white font-semibold",
+      statusText: "Executando",
+      statusClass: "text-accent font-medium",
+    },
+    completed: {
+      card: "border-success/35 bg-bg-elevated/40 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.5)]",
+      number: "bg-success/15 text-success border border-success/35 font-bold",
+      icon: "text-success",
+      label: "text-text-primary font-semibold",
+      statusText: "Concluído",
+      statusClass: "text-success font-medium",
+    },
+    failed: {
+      card: "border-error/35 bg-bg-elevated/40 shadow-[0_2px_8px_-2px_rgba(0,0,0,0.5)]",
+      number: "bg-error/15 text-error border border-error/35 font-bold",
+      icon: "text-error",
+      label: "text-text-primary font-semibold",
+      statusText: "Falhou",
+      statusClass: "text-error font-medium",
+    },
+    skipped: {
+      card: "border-warning/25 bg-bg-elevated/25 opacity-75",
+      number: "bg-warning/10 text-warning border border-warning/25",
+      icon: "text-warning/80",
+      label: "text-text-secondary",
+      statusText: "Ignorado",
+      statusClass: "text-warning/80 font-medium",
     },
   };
 
-  const classes = stateClasses[state];
+  const classes = stateClasses[state] || stateClasses.pending;
 
   return (
-    <div className="flex items-stretch flex-none w-[220px]">
-      <div
-        className={`flex-1 rounded-xl border p-4 transition-all duration-300 flex flex-col ${classes.card}`}
-        role="listitem"
-        aria-label={`Etapa ${step.number}: ${step.label} — ${
-          isRunning ? "Executando" : isCompleted ? "Concluído" : isError ? "Erro" : "Aguardando"
-        }`}
-      >
+    <div
+      className={`rounded-xl border p-4 transition-all duration-300 flex flex-col justify-between h-full min-h-[190px] w-full ${classes.card}`}
+      role="listitem"
+      aria-label={`Etapa ${step.number}: ${step.label} — ${classes.statusText}`}
+    >
+      <div>
+        {/* Top row: step order and status icon */}
         <div className="flex items-center justify-between mb-3">
           <div
-            className={`w-8 h-8 rounded-lg flex items-center justify-center text-[13px] font-bold transition-all ${classes.number}`}
+            className={`w-7 h-7 rounded-lg flex items-center justify-center text-[12px] font-bold transition-all ${classes.number}`}
           >
             {step.number}
           </div>
           <div className={classes.icon}>
-            {isCompleted && <CheckCircle2 size={18} />}
-            {isRunning && <Loader2 size={18} className="animate-spin" />}
-            {isError && <AlertTriangle size={18} />}
-            {isAwaiting && <Circle size={18} />}
+            {isCompleted && <CheckCircle2 size={16} />}
+            {isRunning && <Loader2 size={16} className="animate-spin" />}
+            {isError && <AlertTriangle size={16} />}
+            {isAwaiting && <Circle size={16} />}
+            {isSkipped && <Clock size={16} />}
           </div>
         </div>
 
-        <div className={`mb-2 ${classes.icon}`}>
-          <Icon size={20} strokeWidth={1.8} />
+        {/* Step role and icon */}
+        <div className="flex items-center gap-1.5 mb-1">
+          <div className={`${classes.icon} opacity-80`}>
+            <Icon size={14} strokeWidth={1.8} />
+          </div>
+          <span className="text-[9.5px] uppercase font-semibold tracking-wider text-text-muted">
+            {step.roleLabel}
+          </span>
         </div>
 
-        <div className={`text-[14px] font-semibold leading-tight ${classes.label}`}>
+        {/* Step label / agent name */}
+        <div className={`text-[13.5px] font-semibold leading-snug truncate ${classes.label}`} title={step.label}>
           {step.label}
         </div>
 
-        <div className={`flux-secondary-text mt-1.5 font-medium ${classes.status}`}>
-          {isRunning && "Executando..."}
-          {isCompleted && "Concluído"}
-          {isError && "Falhou"}
-          {isAwaiting && "Aguardando"}
+        {/* Status indicator */}
+        <div className={`text-[11px] mt-0.5 ${classes.statusClass}`}>
+          {classes.statusText}
         </div>
 
+        {/* Summarized Output */}
         {step.output && (
-          <div className="text-[10.5px] text-text-muted mt-1.5 truncate" title={step.output}>
+          <div
+            className="text-[11px] text-text-muted mt-2 leading-relaxed break-words"
+            style={{
+              display: "-webkit-box",
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+            title={step.output}
+          >
             {step.output}
           </div>
         )}
+      </div>
 
-        {/* Duração */}
-        {step.startedAt && (
-          <div className={`text-[10px] mt-1.5 tabular-nums ${isRunning ? "text-text-secondary" : "text-text-muted"}`}>
+      {/* Footer: duration/timestamps and action button */}
+      <div className="mt-3 pt-3 border-t border-border-subtle/30 flex items-center justify-between gap-2 flex-wrap">
+        {step.startedAt ? (
+          <div className={`text-[10px] tabular-nums ${isRunning ? "text-text-secondary" : "text-text-muted"}`}>
             {new Date(step.startedAt).toLocaleTimeString()}
             {step.completedAt && ` → ${new Date(step.completedAt).toLocaleTimeString()}`}
           </div>
+        ) : (
+          <div className="text-[10px] text-text-muted">Aguardando início</div>
+        )}
+
+        {onSelect && step.id && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect();
+            }}
+            className="no-drag text-[11px] font-semibold text-accent hover:text-accent-hover transition-colors flex items-center gap-0.5"
+          >
+            Detalhes →
+          </button>
         )}
       </div>
     </div>
@@ -201,6 +229,8 @@ const STEP_ICONS: Record<string, typeof ClipboardList> = {
   developer: Code2,
   qa: ShieldCheck,
   finalization: Rocket,
+  finalizer: Rocket,
+  fixer: ShieldCheck,
 };
 
 // Labels customizados por nome de step (para modo real)
@@ -230,6 +260,7 @@ export function ExecutionFlowCard({
   executionMode,
   events = [],
   onCancel,
+  onSelectStep,
 }: ExecutionFlowCardProps) {
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
 
@@ -306,6 +337,12 @@ export function ExecutionFlowCard({
     if (t.includes("controlled_execution")) return "Execução controlada";
     return "Executando...";
   })();
+
+  const handleSelect = (stepId: string) => {
+    if (onSelectStep) {
+      onSelectStep(stepId);
+    }
+  };
 
   // Se não há run, mostrar estado vazio
   if (!run) {
@@ -447,27 +484,29 @@ export function ExecutionFlowCard({
             <div className="text-[13px] text-text-secondary">Aguardando início da execução</div>
           </div>
         ) : (
-          <div className="flex items-stretch gap-0 overflow-x-auto pb-2" role="list" aria-label="Pipeline de execução">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" role="list" aria-label="Pipeline de execução">
             {displaySteps.map((step, i) => {
-              const isAgentStep = isReal && step.type === "developer";
-              const displayLabel = isAgentStep ? (executionAgent?.name || "Agente") : step.name;
-              const displayOutput = isAgentStep
-                ? [executionAgent?.model ? `Modelo: ${executionAgent.model}` : null, step.output].filter(Boolean).join(" • ")
-                : step.output;
+              const stepRole = step.type || (step as any).agentRole || "";
+              const stepRoleLabel = getFriendlyRoleLabel(stepRole);
+              const displayLabel = step.name || (step as any).agentName || "Agente";
+              const displayOutput = step.output || (step as any).outputSummary || "";
+
               return (
-                <div key={step.id} className="flex items-stretch flex-none">
+                <div key={step.id} className="flex flex-col">
                   <StepCard
                     step={{
+                      id: step.id,
                       label: displayLabel,
+                      roleLabel: stepRoleLabel,
                       number: i + 1,
-                      icon: isAgentStep ? Code2 : getStepIcon(step),
+                      icon: STEP_ICONS[stepRole] || getStepIcon(step),
                       output: displayOutput || undefined,
                       startedAt: step.startedAt,
                       completedAt: step.completedAt,
                     }}
                     state={mapStepState(step)}
+                    onSelect={() => handleSelect(step.id)}
                   />
-                  {i < displaySteps.length - 1 && <StepConnector state={mapStepState(step)} />}
                 </div>
               );
             })}

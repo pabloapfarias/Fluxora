@@ -1,10 +1,33 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, CheckCircle2, Loader2, AlertTriangle, Clock } from "lucide-react";
 import type { AgentStepOutput } from "@fluxora/shared";
 import { formatAgentRole } from "../../lib/presentationLabels";
 
-export function AgentStepOutputPanel({ outputs }: { outputs: AgentStepOutput[] }) {
+export function AgentStepOutputPanel({
+  outputs,
+  initialOpenStepId,
+}: {
+  outputs: AgentStepOutput[];
+  initialOpenStepId?: string | null;
+}) {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (initialOpenStepId) {
+      setOpenSections((prev) => ({
+        ...prev,
+        [initialOpenStepId]: true,
+      }));
+      
+      // Realiza scroll suave para o elemento correspondente
+      setTimeout(() => {
+        const el = document.getElementById(`agent-step-${initialOpenStepId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 150);
+    }
+  }, [initialOpenStepId]);
 
   if (outputs.length === 0) {
     return (
@@ -22,6 +45,7 @@ export function AgentStepOutputPanel({ outputs }: { outputs: AgentStepOutput[] }
         return (
           <div
             key={output.id}
+            id={`agent-step-${output.id}`}
             className={`rounded-xl border overflow-hidden transition-colors ${
               output.status === "completed"
                 ? "border-success/30 bg-success-soft/10"

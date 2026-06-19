@@ -317,7 +317,15 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   modo Real usando `isAgentConfiguredForRealExecution` em vez
   de `missions.getReadiness()`. Garante que provider/modelo
   herdado é aceito, padroniza mensagens de erro e atualiza
-  command palette para usar `isAgentReadyWithFallback`.
+  command palette para usar `isAgentReadyWithFallback`. Corrige
+  também o travamento (freeze) de inicialização do app convertendo
+  todos os comandos bloqueantes do Tauri para `async fn`.
+- [PR 014.2 — Corrigir UI do fluxo de execução real](./STATUS_MIGRATION_TAURI_PR_014_2_EXECUTION_UI.md)
+  Ajusta e corrige a estabilidade visual e funcional da timeline da execução real.
+  Converte a exibição horizontal do pipeline para um grid responsivo de 4 colunas
+  (Planner, Developer, QA, Finalizer), prevenindo sobreposição de texto ou horário,
+  truncando outputs extensos em no máximo 3 linhas e implementando navegação com scroll
+  suave para detalhamento completo na aba Agentes ao selecionar qualquer card.
 
 ## Convenções aplicadas em todas as PRs
 

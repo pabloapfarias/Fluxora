@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -27,7 +27,7 @@ import type {
   WorkflowRerunInput,
 } from "@fluxora/shared";
 import { validateApprovalContext } from "@fluxora/shared";
-import { WorkflowTimeline } from "../components/workflow/WorkflowTimeline";
+import { ExecutionFlowCard } from "../components/overview/ExecutionFlowCard";
 import { EventLog } from "../components/events/EventLog";
 import { AgentStepOutputPanel } from "../components/agents/AgentStepOutputPanel";
 import { DiffViewer } from "../components/diff/DiffViewer";
@@ -43,14 +43,28 @@ type DetailTab = "resumo" | "agentes" | "logs" | "resultado" | "arquivos" | "apr
 export function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const initialTab = (searchParams.get("tab") as DetailTab) || "resumo";
+  const initialStepId = searchParams.get("step");
+
   const [detail, setDetail] = useState<WorkflowRunDetail | null>(null);
   const [outputs, setOutputs] = useState<AgentStepOutput[]>([]);
   const [job, setJob] = useState<BackgroundWorkflowJob | null>(null);
-  const [tab, setTab] = useState<DetailTab>("resumo");
+  const [tab, setTab] = useState<DetailTab>(initialTab);
+  const [selectedAgentStepId, setSelectedAgentStepId] = useState<string | null>(initialStepId);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [approvalActionLoading, setApprovalActionLoading] = useState<"approve" | "reject" | null>(null);
   const [rerunModalOpen, setRerunModalOpen] = useState(false);
+
+  useEffect(() => {
+    const qTab = searchParams.get("tab") as DetailTab;
+    const qStep = searchParams.get("step");
+    if (qTab) setTab(qTab);
+    if (qStep) setSelectedAgentStepId(qStep);
+  }, [searchParams]);
 
   const isControlledExecution = useMemo(() => {
     if (!detail?.generatedContext) return false;
@@ -298,6 +312,17 @@ export function ExecutionDetailPage() {
         />
       )}
 
+      {/* Visual execution timeline */}
+      <ExecutionFlowCard
+        run={detail}
+        activeJob={job && ["queued", "running"].includes(job.status) ? job : null}
+        events={detail.events}
+        onSelectStep={(stepId) => {
+          setTab("agentes");
+          setSelectedAgentStepId(stepId);
+        }}
+      />
+
       {/* Tab bar */}
       <div
         className="flex items-center gap-1 border-b border-border-subtle overflow-x-auto"
@@ -384,7 +409,7 @@ export function ExecutionDetailPage() {
         {tab === "agentes" && (
           <div className="bg-bg-card border border-border rounded-xl p-5">
             {isMultiAgent || outputs.length > 0 ? (
-              <AgentStepOutputPanel outputs={outputs} />
+              <AgentStepOutputPanel outputs={outputs} initialOpenStepId={selectedAgentStepId} />
             ) : (
               <div className="text-[13px] text-text-muted py-8 text-center">
                 Esta missão não registrou steps detalhados de agentes.

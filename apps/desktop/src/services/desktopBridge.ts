@@ -776,6 +776,18 @@ function toLegacyAgentStepOutput(step: AgentStepRecord): AgentStepOutput {
       : step.status === "running" || step.status === "pending"
       ? "running"
       : "cancelled";
+
+  let friendlyName = step.agentName;
+  if (!friendlyName) {
+    switch (step.role) {
+      case "planner": friendlyName = "Planner"; break;
+      case "developer": friendlyName = "Developer"; break;
+      case "qa": friendlyName = "QA"; break;
+      case "finalizer": friendlyName = "Finalizer"; break;
+      default: friendlyName = step.role; break;
+    }
+  }
+
   return {
     id: step.id,
     workflowRunId: step.missionId,
@@ -783,13 +795,15 @@ function toLegacyAgentStepOutput(step: AgentStepRecord): AgentStepOutput {
     stepId: step.agentId,
     agentRole: step.role,
     agentName: step.agentName,
+    name: friendlyName,
+    type: step.role as any,
     prompt: step.inputSummary ?? "",
-    output: step.outputText ?? step.outputSummary ?? "",
+    output: step.outputText ?? step.outputSummary ?? step.error ?? "",
     parsedOutput: step.metadata ? JSON.stringify(step.metadata) : undefined,
     status: legacyStatus,
     startedAt: step.startedAt ?? step.createdAt,
     completedAt: step.completedAt,
-  };
+  } as any;
 }
 
 /**
@@ -835,6 +849,8 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
       stepId: "step-planner",
       agentRole: "planner",
       agentName: "Planner",
+      name: "Planner",
+      type: "planner" as any,
       prompt: mission.prompt,
       output: logs
         .filter((l) => l.phase === "context" || l.phase === "planning")
@@ -844,7 +860,7 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
       status: isMissionFailed && !plannerCompleted ? "failed" : "completed",
       startedAt: plannerStarted ?? mission.createdAt,
       completedAt: plannerCompleted ?? plannerStarted,
-    },
+    } as any,
     {
       id: `${mission.id}-step-provider`,
       workflowRunId: mission.id,
@@ -852,6 +868,8 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
       stepId: "step-provider",
       agentRole: "developer",
       agentName: "Provider Call",
+      name: "Provider Call",
+      type: "developer" as any,
       prompt: mission.prompt,
       output: logs
         .filter((l) => l.phase === "provider-call" || l.phase === "response")
@@ -861,7 +879,7 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
       status: isMissionFailed && !providerCompleted ? "failed" : "completed",
       startedAt: providerStarted ?? plannerCompleted ?? mission.startedAt ?? mission.createdAt,
       completedAt: providerCompleted ?? providerStarted,
-    },
+    } as any,
     {
       id: `${mission.id}-step-finalization`,
       workflowRunId: mission.id,
@@ -869,6 +887,8 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
       stepId: "step-finalization",
       agentRole: "qa",
       agentName: "Final Report",
+      name: "Final Report",
+      type: "qa" as any,
       prompt: mission.prompt,
       output: mission.resultText ?? logs
         .filter((l) => l.phase === "final-report" || l.phase === "failed")
@@ -880,7 +900,7 @@ function buildSyntheticSteps(mission: MissionRun, logs: MissionLog[]): AgentStep
         : "completed",
       startedAt: finalReportStarted ?? providerCompleted ?? mission.startedAt ?? mission.createdAt,
       completedAt: finalReportCompleted ?? finalReportStarted,
-    },
+    } as any,
   ];
 }
 

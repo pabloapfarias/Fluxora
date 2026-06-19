@@ -2,23 +2,20 @@
 
 ## 1. Objetivo da hotfix
 
-Corrigir o bloqueio indevido do modo Real na Central de Comando. O sistema
-mostrava o alerta "Modo real indisponível. Configure ao menos um provider
-ativo e um agente com modelo selecionado na tela de Agentes." mesmo quando
-a `missions.getReadiness()` retornava `ready === true`.
+1. Corrigir o bloqueio indevido do modo Real na Central de Comando. O sistema mostrava o alerta "Modo real indisponível. Configure ao menos um provider ativo e um agente com modelo selecionado na tela de Agentes." mesmo quando a `missions.getReadiness()` retornava `ready === true`.
+2. Corrigir o travamento/congelamento inicial (freeze) do aplicativo ao iniciar, no qual o app ficava travado logo na tela de abertura.
 
 ## 2. Sintoma observado
 
-1. Barra superior mostra: "Missões e agentes sem sobrescrita usarão
-   deepseek-v4-flash."
-2. Configurações mostram: Provider Engine pronto, Agent Engine com 4
-   agentes persistidos, Mission Engine pronto.
-3. AgentsPage mostra: Planner, Developer, QA e Finalizer habilitados,
-   todos herdando provider/modelo, provider efetivo `provider-1781834595533-0`,
-   modelo efetivo `deepseek-v4-flash`.
-4. Ao enviar missão no modo Real, aparece alerta: "Modo real indisponível.
-   Configure ao menos um provider ativo e um agente com modelo selecionado
-   na tela de Agentes."
+### 2.1 Bloqueio do modo Real
+1. Barra superior mostra: "Missões e agentes sem sobrescrita usarão deepseek-v4-flash."
+2. Configurações mostram: Provider Engine pronto, Agent Engine com 4 agentes persistidos, Mission Engine pronto.
+3. AgentsPage mostra: Planner, Developer, QA e Finalizer habilitados, todos herdando provider/modelo, provider efetivo `provider-1781834595533-0`, modelo efetivo `deepseek-v4-flash`.
+4. Ao enviar missão no modo Real, aparece alerta: "Modo real indisponível. Configure ao menos um provider ativo e um agente com modelo selecionado na tela de Agentes."
+
+### 2.2 Travamento inicial (App começa congelado)
+1. Ao abrir o aplicativo, a janela ficava congelada sem responder a cliques ou atalhos de teclado.
+2. A thread principal ficava ocupada aguardando requisições síncronas de rede/disco iniciadas pelo frontend no carregamento inicial.
 
 ## 3. Causa raiz
 
@@ -68,6 +65,9 @@ corretamente e, se `ready`, chamava `executeCommand(text)`. Mas
 `executeCommand` tinha seu próprio guard legado que bloqueava antes de
 chegar à criação da missão.
 
+### 3.4 Travamento inicial devido a comandos síncronos de I/O na thread de UI
+Os comandos do Tauri declarados no backend Rust em `lib.rs` eram, em sua maioria, funções síncronas (`fn`). Durante o carregamento inicial da interface (`AppShell.tsx`), o frontend executava requisições concorrentes e chamava `providers_list_models` para construir o catálogo. Como esse comando efetuava chamadas HTTP síncronas/bloqueantes de rede (`ureq`) com timeout de 8 segundos, ele ocupava a thread principal de interface gráfica (event loop do Tauri), deixando o aplicativo completamente travado na inicialização.
+
 ## 4. Qual guard antigo bloqueava o modo Real
 
 O guard em `executeCommand` (linhas 519-528) que usava
@@ -101,6 +101,10 @@ herança de provider/modelo via `globalDefault`.
 - **Atualizado**: Readiness de agentes no command palette — usa
   `isAgentReadyWithFallback(agent, globalDefault)` em vez de checar
   `modelProviderId`/`modelName` explicitamente.
+
+### `apps/desktop/src-tauri/src/lib.rs`
+
+- **Atualizado**: Todos os comandos do Tauri que efetuam chamadas bloqueantes de rede ou disco (como `providers_list_models`, `fs_*`, `git_*`, `missions_run`, etc.) foram migrados de `fn` síncronos para `async fn` assíncronos. Isso delega a execução dessas tarefas pesadas e conexões externas para o pool de tarefas assíncronas do `tokio` (gerenciado pelo Tauri), impedindo o bloqueio da thread principal da interface gráfica e solucionando o congelamento completo do aplicativo no startup.
 
 ## 6. Como o submit real funciona agora
 
