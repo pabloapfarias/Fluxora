@@ -770,6 +770,17 @@ export interface Approval {
    * compatibilidade com aprovações legadas sem `action`.
    */
   action?: string;
+  /**
+   * HOTFIX UI E2E — Payload bruto (mesmo formato do
+   * `ExecutionApproval.payload`). Para aprovações de
+   * `apply-patch` o backend Rust grava
+   * `{ proposalId, missionId, projectId, files, source }`
+   * aqui, e a UI usa esses campos para renderizar o card da
+   * aba "Aprovação" e confirmar a existência de contexto
+   * acionável. Opcional para compatibilidade com aprovações
+   * legadas que ainda não carregam `payload`.
+   */
+  payload?: unknown;
 }
 
 // ─── Rastreabilidade (PR 008) ─────────────────────────────────────────
@@ -891,7 +902,43 @@ export function validateApprovalContext(
   const hasAttempts = automaticAttempts.length > 0;
   const hasError = description.toLowerCase().includes("erro") || description.toLowerCase().includes("falha");
 
-  const hasActionableContext = hasFiles || hasDiff || hasQa || hasIssues || hasAttempts || hasError;
+  // HOTFIX UI E2E — Para aprovações de `apply-patch` o
+  // vínculo a uma `PatchProposal` (via `payload.proposalId`
+  // + `payload.files`) é contexto suficiente para aprovar:
+  // a UI já tem a proposta renderizada (proposalId,
+  // missionId, projectId, files) e o backend sabe exatamente
+  // o que aplicar. Não exigir arquivo inline na descrição
+  // evita o falso "contexto insuficiente" em missões onde a
+  // proposta é a fonte de verdade.
+  let hasProposalAttachment = false;
+  try {
+    const payload = (approval as unknown as { payload?: unknown }).payload;
+    if (payload && typeof payload === "object") {
+      const obj = payload as Record<string, unknown>;
+      const pid = obj.proposalId;
+      const files = obj.files;
+      if (typeof pid === "string" && pid.length > 0) {
+        if (Array.isArray(files) && files.length > 0) {
+          hasProposalAttachment = true;
+        } else if (approval.action === "apply-patch") {
+          // Para apply-patch basta o proposalId — a UI sempre
+          // renderiza a proposta vinculada.
+          hasProposalAttachment = true;
+        }
+      }
+    }
+  } catch {
+    // noop — em caso de payload malformado, cai na heurística antiga
+  }
+
+  const hasActionableContext =
+    hasFiles ||
+    hasDiff ||
+    hasQa ||
+    hasIssues ||
+    hasAttempts ||
+    hasError ||
+    hasProposalAttachment;
 
   let canApprove = true;
   let invalidReason: string | undefined;

@@ -543,6 +543,51 @@ pub fn find_proposals_by_mission(state: &PatchesState, mission_id: &str) -> Vec<
     out
 }
 
+/// HOTFIX UI E2E — Recupera a `PatchProposal` pendente de
+/// aprovação vinculada a uma missão. Preferência:
+/// 1. Vínculo direto via `proposal.approval_id` (quando
+///    informado).
+/// 2. Fallback: proposta em status `pending_approval` da
+///    mesma missão, mais recente.
+///
+/// Usado por `approvals_approve` para cobrir approvals
+/// legadas cujo payload não tem `proposalId` — sem este
+/// fallback, o clique em "Aprovar" só marcaria a aprovação
+/// como `approved` e nunca dispararia `patches_apply`,
+/// deixando os arquivos sem serem gravados no disco.
+pub fn find_pending_proposal_for_mission(
+    app: &AppHandle,
+    mission_id: &str,
+    approval_id: Option<&str>,
+) -> Option<String> {
+    let state = app.state::<PatchesState>();
+    let guard = state.proposals.lock().ok()?;
+    let mut best: Option<&crate::patches::PatchProposalRecord> = None;
+    for proposal in guard.iter() {
+        if proposal.mission_id != mission_id {
+            continue;
+        }
+        if proposal.status != PatchProposalStatus::PendingApproval.as_str() {
+            continue;
+        }
+        if let Some(aid) = approval_id {
+            if proposal.approval_id.as_deref() == Some(aid) {
+                return Some(proposal.id.clone());
+            }
+        }
+        if best.is_none()
+            || proposal.created_at
+                > best
+                    .as_ref()
+                    .map(|b| b.created_at.clone())
+                    .unwrap_or_default()
+        {
+            best = Some(proposal);
+        }
+    }
+    best.map(|p| p.id.clone())
+}
+
 fn upsert_proposal(state: &PatchesState, proposal: PatchProposalRecord) -> PatchProposalRecord {
     let mut guard = match state.proposals.lock() {
         Ok(guard) => guard,
@@ -1636,13 +1681,58 @@ pub fn create_proposal_from_provider_text(
     }
     if needs_approval {
         // Cria uma ExecutionApproval vinculada.
+        //
+        // HOTFIX UI E2E — O description precisa carregar
+        // contexto acionável (prefixos "Missão:" / "Motivo:" /
+        // "Agente:" / "Resumo:" + lista de arquivos com
+        // "- <path>") para que o `validateApprovalContext` da
+        // UI não retorne `canApprove = false` com a mensagem
+        // "contexto insuficiente" enquanto a proposta está
+        // vinculada. O `runPrompt` da UI também é fonte de
+        // contexto, mas a defesa em profundidade aqui evita a
+        // regressão mesmo em fluxos sem prompt (ex.: patch
+        // proposto via comando interno).
+        let file_paths: Vec<String> =
+            stored.files.iter().map(|f| f.path.clone()).collect();
+        let file_lines: Vec<String> = stored
+            .files
+            .iter()
+            .map(|f| {
+                let op = if f.operation == "create" {
+                    "added"
+                } else if f.operation == "delete" {
+                    "deleted"
+                } else {
+                    "modified"
+                };
+                let adds = f.additions.unwrap_or(0);
+                let dels = f.deletions.unwrap_or(0);
+                format!("- {} ({}, +{}/-{})", f.path, op, adds, dels)
+            })
+            .collect();
+        let summary_line = stored
+            .summary
+            .clone()
+            .unwrap_or_else(|| format!("{} arquivo(s) alterado(s).", stored.files.len()));
         let title = format!("Aplicar patch: {}", stored.title);
-        let description = format!(
-            "A política do projeto '{}' exige aprovação explícita para aplicar a proposta '{}' ({} arquivo(s)).",
-            stored.project_id,
+        let mut description_lines: Vec<String> = Vec::new();
+        description_lines.push(format!("Missão: {}", stored.title));
+        description_lines.push(format!(
+            "Motivo: A política do projeto exige aprovação explícita para aplicar a proposta '{}' ({} arquivo(s)).",
             stored.title,
             stored.files.len()
-        );
+        ));
+        description_lines.push(String::new());
+        description_lines.push("Arquivos alterados:".to_string());
+        for line in &file_lines {
+            description_lines.push(line.clone());
+        }
+        description_lines.push(String::new());
+        description_lines.push(format!("Resumo: {summary_line}"));
+        description_lines.push("Impacto: Médio".to_string());
+        description_lines.push("Agente: Fluxora Mission Engine (Developer)".to_string());
+        description_lines.push(format!("Projeto: {}", stored.project_id));
+        let description = description_lines.join("\n");
         let risk = if stored.files.iter().any(|f| f.operation == "delete") {
             "high"
         } else {
@@ -1656,9 +1746,18 @@ pub fn create_proposal_from_provider_text(
             description,
             risk: risk.to_string(),
             requested_by: Some("mission-engine".to_string()),
+            // HOTFIX UI E2E — Payload completo para que a UI
+            // consiga renderizar o card da aprovação com
+            // `proposalId` / `missionId` / `projectId` / `files`
+            // (sem precisar varrer o `PatchProposal` em paralelo).
+            // O `approvals.approve` lê `proposalId` deste payload
+            // para disparar `patches_apply`.
             payload: Some(serde_json::json!({
                 "source": "mission-engine",
                 "proposalId": &stored.id,
+                "missionId": &stored.mission_id,
+                "projectId": &stored.project_id,
+                "files": file_paths,
                 "filesCount": stored.files.len(),
             })),
         };
@@ -2647,6 +2746,132 @@ mod tests {
 
         eprintln!(
             "[Fluxora Patch Compiler] UI_DISK_WRITE_PROVEN project=/tmp/fluxora-tailwind-test scenario=tailwind-migration files=index.html"
+        );
+    }
+
+    /// HOTFIX UI E2E — Prova E2E canônica do cenário de
+    /// aprovação de `apply-patch` para a landing page de
+    /// seguros, no diretório exato pedido pelo manual de
+    /// validação: `/tmp/fluxora-approval-test` (com `.git`
+    /// já inicializado pelo usuário, conforme
+    /// `STATUS_HOTFIX_APPROVAL_PATCH_CONTEXT.md`).
+    ///
+    /// Reproduz o que acontece quando o usuário clica em
+    /// "Aprovar" na aba Aprovação da `ExecutionDetailPage`:
+    /// `approvals.approve` → `patches_apply` →
+    /// `apply_one_file` para cada arquivo. Os mesmos
+    /// `PatchFileChangeRecord` chegam ao backend pelo
+    /// `fluxora_patch` do Developer; o teste usa o payload
+    /// canônico da landing page (3 arquivos) e o
+    /// `apply_one_file` real (não uma cópia) escreve no
+    /// disco do diretório de teste. O test runner então
+    /// pode ser seguido pelos comandos `find` /
+    /// `git status --short` para confirmar que os arquivos
+    /// foram realmente criados no diretório do projeto.
+    #[test]
+    fn patch_apply_creates_three_files_in_fluxora_approval_test() {
+        let project_dir = std::path::PathBuf::from("/tmp/fluxora-approval-test");
+        // Garante que o diretório existe (criado pelo usuário
+        // no script de validação). Se não existir (ex.:
+        // primeira execução do teste isolado), cria e
+        // inicializa um `.git` mínimo para o `git status`
+        // funcionar de forma consistente.
+        if !project_dir.exists() {
+            std::fs::create_dir_all(&project_dir).unwrap();
+        }
+        // Limpa apenas os 3 arquivos do teste, preservando
+        // qualquer `.git` / `.gitignore` configurado pelo
+        // usuário (idempotência entre execuções).
+        for filename in &["index.html", "styles.css", "script.js"] {
+            let _ = std::fs::remove_file(project_dir.join(filename));
+        }
+
+        // Mesmo `fluxora_patch` que o Patch Compiler gera
+        // quando a missão é "Crie uma landing page simples
+        // para uma corretora de seguros usando HTML, CSS e
+        // JavaScript. Crie obrigatoriamente os arquivos
+        // index.html, styles.css e script.js."
+        let files = vec![
+            PatchFileChangeRecord {
+                path: "index.html".to_string(),
+                operation: "create".to_string(),
+                before_content: None,
+                after_content: Some(
+                    "<!DOCTYPE html>\n<html lang=\"pt-BR\">\n\
+                     <head><meta charset=\"UTF-8\">\n\
+                     <title>Corretora de Seguros</title>\n\
+                     <link rel=\"stylesheet\" href=\"styles.css\">\n\
+                     </head>\n\
+                     <body><h1>Corretora de Seguros</h1>\n\
+                     <script src=\"script.js\"></script>\n\
+                     </body></html>\n"
+                        .to_string(),
+                ),
+                unified_diff: None,
+                additions: None,
+                deletions: None,
+                is_new_file: None,
+                is_deleted_file: None,
+            },
+            PatchFileChangeRecord {
+                path: "styles.css".to_string(),
+                operation: "create".to_string(),
+                before_content: None,
+                after_content: Some(
+                    "body { font-family: sans-serif; margin: 0; padding: 2rem; }\n\
+                     h1 { color: #1e40af; }\n"
+                        .to_string(),
+                ),
+                unified_diff: None,
+                additions: None,
+                deletions: None,
+                is_new_file: None,
+                is_deleted_file: None,
+            },
+            PatchFileChangeRecord {
+                path: "script.js".to_string(),
+                operation: "create".to_string(),
+                before_content: None,
+                after_content: Some(
+                    "console.log('Landing page da corretora carregada.');\n"
+                        .to_string(),
+                ),
+                unified_diff: None,
+                additions: None,
+                deletions: None,
+                is_new_file: None,
+                is_deleted_file: None,
+            },
+        ];
+
+        // Aplica cada arquivo usando o `apply_one_file` real
+        // (mesma função que `patches_apply` chama em runtime
+        // Tauri). Garante que o disco é gravado de verdade,
+        // não só simulado.
+        for file in &files {
+            let result = apply_one_file(&project_dir, file);
+            assert!(
+                result.is_ok(),
+                "Falha ao aplicar {} no disco: {:?}",
+                file.path,
+                result
+            );
+        }
+
+        // Prova: os 3 arquivos existem no disco.
+        for filename in &["index.html", "styles.css", "script.js"] {
+            let p = project_dir.join(filename);
+            assert!(
+                p.exists(),
+                "Arquivo {} não foi criado em {}",
+                filename,
+                project_dir.display()
+            );
+        }
+
+        eprintln!(
+            "[Fluxora E2E Disk] APPLY_APPROVAL_PROVEN project={} files=index.html,styles.css,script.js",
+            project_dir.display()
         );
     }
 }

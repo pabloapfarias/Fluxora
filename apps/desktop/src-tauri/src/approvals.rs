@@ -496,14 +496,43 @@ pub fn approvals_approve(
     // aprovação de `apply-patch` dispara a aplicação da
     // proposta vinculada (se houver e se a política permitir).
     if updated.action == "apply-patch" {
-        // Tenta localizar a PatchProposal vinculada pelo
-        // `proposalId` salvo no payload da aprovação.
-        let linked_proposal_id: Option<String> = updated
+        // 1) Tenta localizar a PatchProposal vinculada pelo
+        //    `proposalId` salvo no payload da aprovação
+        //    (criado por `create_proposal_from_provider_text`
+        //    / permissions-check).
+        let mut linked_proposal_id: Option<String> = updated
             .payload
             .as_ref()
             .and_then(|p| p.get("proposalId"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // 2) HOTFIX UI E2E — Fallback: se o payload não tiver
+        //    `proposalId` mas a aprovação tiver `missionId`,
+        //    tenta localizar uma `PatchProposal` em status
+        //    `pending_approval` da mesma missão (vínculo
+        //    inverso: proposal.approvalId === updated.id, ou
+        //    por missionId quando o vínculo direto falhar).
+        //    Isso cobre approvals legadas sem `proposalId` no
+        //    payload e o cenário em que a UI manda aprovar
+        //    pelo `approvalId` antes de a proposta estar
+        //    plenamente vinculada.
+        if linked_proposal_id.is_none() {
+            if let Some(mid) = updated.mission_id.as_deref() {
+                if let Some(found) = crate::patches::find_pending_proposal_for_mission(
+                    &app,
+                    mid,
+                    Some(&updated.id),
+                ) {
+                    eprintln!(
+                        "[Fluxora E2E Disk] approval_approved_recovered_proposal approvalId={} missionId={} proposalId={}",
+                        updated.id,
+                        mid,
+                        found
+                    );
+                    linked_proposal_id = Some(found);
+                }
+            }
+        }
         // HOTFIX UI E2E — Log seguro do approval + intenção de
         // apply. Não loga conteúdo.
         eprintln!(

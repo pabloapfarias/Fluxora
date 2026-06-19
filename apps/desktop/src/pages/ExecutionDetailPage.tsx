@@ -237,6 +237,11 @@ function toLegacyApprovalLocal(input: ExecutionApproval): Approval {
     createdAt: input.createdAt,
     resolvedAt: input.resolvedAt,
     action: input.action,
+    // HOTFIX UI E2E — Propaga o `payload` para a UI ter
+    // acesso ao `proposalId` / `missionId` / `projectId` /
+    // `files` da PatchProposal vinculada (usado no card da
+    // aba Aprovação e no fallback de validação de contexto).
+    payload: input.payload,
   } as Approval;
 }
 
@@ -1157,6 +1162,45 @@ function ApprovalSection({
     [approval, runPrompt]
   );
 
+  // HOTFIX UI E2E — Extrai os identificadores de vínculo do
+  // `payload` da `ExecutionApproval` (proposta vinculada).
+  // O backend Rust grava `proposalId` / `missionId` /
+  // `projectId` / `files` no payload quando a aprovação é
+  // de `apply-patch` (ver `patches::create_proposal_from_provider_text`).
+  // Esses campos alimentam o card da aba "Aprovação" mesmo
+  // quando a descrição textual é pobre.
+  const proposalLink = useMemo(() => {
+    const out: {
+      proposalId?: string;
+      missionId?: string;
+      projectId?: string;
+      files?: string[];
+    } = {};
+    if (!approval) return out;
+    const raw = (approval as unknown as { payload?: unknown }).payload;
+    if (!raw || typeof raw !== "object") return out;
+    const obj = raw as Record<string, unknown>;
+    if (typeof obj.proposalId === "string") out.proposalId = obj.proposalId;
+    if (typeof obj.missionId === "string") out.missionId = obj.missionId;
+    if (typeof obj.projectId === "string") out.projectId = obj.projectId;
+    if (Array.isArray(obj.files)) {
+      out.files = obj.files.filter((v): v is string => typeof v === "string");
+    }
+    return out;
+  }, [approval]);
+
+  // HOTFIX UI E2E — Quando existe `PatchProposal` pendente
+  // (status `pending_approval` ou `draft` esperando apply),
+  // a UI sempre tem contexto acionável, mesmo que a
+  // `ExecutionApproval` esteja com descrição pobre ou ausente.
+  // Esse sinal também é usado para desligar o alerta
+  // "contexto insuficiente" legado.
+  const pendingProposal = proposal?.status === "pending_approval" ? proposal : null;
+  const appliedProposal = proposal?.status === "applied" ? proposal : null;
+  const hasProposalContext = Boolean(
+    proposalLink.proposalId || pendingProposal || appliedProposal,
+  );
+
   if (!approval && !proposal && !isControlledExecution) {
     return (
       <div className="bg-bg-card border border-border rounded-xl p-5">
@@ -1167,12 +1211,19 @@ function ApprovalSection({
     );
   }
 
-  const canApprove = approvalCtx?.canApprove !== false;
+  // HOTFIX UI E2E — PatchProposal vinculada desativa o
+  // alerta "contexto insuficiente" mesmo que a validação
+  // textual clássica falhe. A proposta anexa é a fonte de
+  // verdade do que será aplicado.
+  const canApprove = approvalCtx?.canApprove !== false || hasProposalContext;
+  const showInsufficientAlert =
+    isPending && !canApprove && !hasProposalContext;
 
   return (
     <div className="space-y-4">
-      {/* Alerta de contexto insuficiente */}
-      {isPending && !canApprove && (
+      {/* Alerta de contexto insuficiente — só quando NÃO existe
+          PatchProposal vinculada e a validação clássica falhou. */}
+      {showInsufficientAlert && (
         <div className="rounded-xl border border-error/30 bg-error-soft/10 p-5">
           <div className="flex items-start gap-3">
             <AlertTriangle size={18} className="text-error flex-shrink-0 mt-0.5" />
@@ -1212,7 +1263,9 @@ function ApprovalSection({
             <div className="flex-1 min-w-0">
               <div className="text-[14px] font-semibold text-text-primary">
                 {approval.status === "approved"
-                  ? "Aprovação concedida"
+                  ? appliedProposal
+                    ? "Patch aplicado"
+                    : "Aprovação concedida"
                   : approval.status === "rejected"
                   ? "Aprovação rejeitada"
                   : !canApprove
@@ -1222,6 +1275,46 @@ function ApprovalSection({
               <div className="text-[12px] text-text-secondary mt-0.5">{approval.title}</div>
             </div>
           </div>
+
+          {/* Bloco de identificadores — HOTFIX UI E2E */}
+          {(proposalLink.proposalId ||
+            proposalLink.missionId ||
+            proposalLink.projectId ||
+            (proposalLink.files && proposalLink.files.length > 0)) && (
+            <div className="rounded-lg border border-border-subtle bg-bg-deep/40 p-3 mb-3 space-y-1.5">
+              <div className="text-[10.5px] uppercase tracking-[0.12em] text-text-muted font-semibold">
+                Contexto da proposta
+              </div>
+              {proposalLink.proposalId && (
+                <div className="text-[11.5px] font-mono break-all">
+                  <span className="text-text-muted">proposalId: </span>
+                  <span className="text-text-primary">{proposalLink.proposalId}</span>
+                </div>
+              )}
+              {proposalLink.missionId && (
+                <div className="text-[11.5px] font-mono break-all">
+                  <span className="text-text-muted">missionId: </span>
+                  <span className="text-text-primary">{proposalLink.missionId}</span>
+                </div>
+              )}
+              {proposalLink.projectId && (
+                <div className="text-[11.5px] font-mono break-all">
+                  <span className="text-text-muted">projectId: </span>
+                  <span className="text-text-primary">{proposalLink.projectId}</span>
+                </div>
+              )}
+              <div className="text-[11.5px] font-mono break-all">
+                <span className="text-text-muted">approvalId: </span>
+                <span className="text-text-primary">{approval.id}</span>
+              </div>
+              {proposalLink.files && proposalLink.files.length > 0 && (
+                <div className="text-[11.5px] font-mono break-all">
+                  <span className="text-text-muted">files: </span>
+                  <span className="text-text-primary">[{proposalLink.files.join(", ")}]</span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Descrição rica */}
           {approval.description && (
@@ -1283,8 +1376,8 @@ function ApprovalSection({
             </div>
           )}
 
-          {/* Quando não pode aprovar, mostrar ação alternativa */}
-          {isPending && !canApprove && (
+          {/* Quando não pode aprovar e não há proposta vinculada */}
+          {isPending && !canApprove && !hasProposalContext && (
             <div className="text-[11px] text-text-muted">
               Esta aprovação não pode ser aprovada ou rejeitada porque o contexto é insuficiente.
             </div>

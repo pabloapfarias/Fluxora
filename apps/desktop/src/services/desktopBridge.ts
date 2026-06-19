@@ -973,6 +973,12 @@ function toLegacyApproval(input: ExecutionApproval): Approval {
     // não tem como saber qual aprovação pode auto-aprovar e
     // qual deve permanecer pendente para revisão do usuário.
     action: input.action,
+    // HOTFIX UI E2E — Passa o `payload` (com `proposalId` /
+    // `missionId` / `projectId` / `files`) para que a UI
+    // possa renderizar o card de aprovação com o contexto da
+    // `PatchProposal` vinculada e confirmar a existência de
+    // contexto acionável para `apply-patch`.
+    payload: input.payload,
   };
 }
 

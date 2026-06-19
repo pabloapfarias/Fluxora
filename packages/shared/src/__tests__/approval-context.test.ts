@@ -206,4 +206,41 @@ describe("validateApprovalContext", () => {
     expect(ctx.canApprove).toBe(true);
     expect(ctx.invalidReason).toContain("Contexto mínimo");
   });
+
+  // ---- HOTFIX UI E2E — Aprovação de apply-patch com payload de PatchProposal ----
+
+  it("retorna canApprove=true quando approval apply-patch tem proposalId+files no payload mesmo sem runPrompt", () => {
+    const approval = makeApproval({
+      title: "Aplicar patch: Landing de seguros",
+      description: "Aplicar patch: Landing de seguros",
+      action: "apply-patch",
+      // descrição técnica antiga: sem prefixos, sem lista de arquivos
+      payload: {
+        proposalId: "patch-1781893116793-0",
+        missionId: "mission-1",
+        projectId: "project-1",
+        files: ["index.html", "styles.css", "script.js"],
+        source: "mission-engine",
+      },
+    });
+    const ctx = validateApprovalContext(approval);
+    expect(ctx.canApprove).toBe(true);
+    expect(ctx.invalidReason).toBeUndefined();
+  });
+
+  it("retorna canApprove=true quando approval apply-patch tem apenas proposalId (sem files) e runPrompt curto", () => {
+    const approval = makeApproval({
+      title: "Aplicar patch",
+      description: "Aplicar patch",
+      action: "apply-patch",
+      payload: {
+        proposalId: "patch-1781893116793-0",
+        missionId: "mission-1",
+        projectId: "project-1",
+        source: "mission-engine",
+      },
+    });
+    const ctx = validateApprovalContext(approval, { runPrompt: "Criar landing" });
+    expect(ctx.canApprove).toBe(true);
+  });
 });
