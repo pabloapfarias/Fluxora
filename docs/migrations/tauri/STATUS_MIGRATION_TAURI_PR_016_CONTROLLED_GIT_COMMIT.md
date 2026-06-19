@@ -1,10 +1,10 @@
 # STATUS_MIGRATION_TAURI_PR_016_CONTROLLED_GIT_COMMIT
 
 ## 1. Objetivo da PR 016
-Adicionar suporte a Git local controlado após a aplicação de patch por missões assistidas no FluxoraV1. Esta PR permite que o usuário crie opcionalmente uma branch local e um commit local contendo apenas os arquivos criados ou modificados pela PatchProposal aprovada da missão, gerando um snapshot Git seguro para recuperação de forma manual e explícita na UI, sem realizar push ou pull remoto, e sem checkouts ou resets destrutivos.
+Adicionar suporte a Git local controlado após a aplicação de patch por missões assistidas no Fluxora. Esta PR permite que o usuário crie opcionalmente uma branch local e um commit local contendo apenas os arquivos criados ou modificados pela PatchProposal aprovada da missão, gerando um snapshot Git seguro para recuperação de forma manual e explícita na UI, sem realizar push ou pull remoto, e sem checkouts ou resets destrutivos.
 
 ## 2. Estado Herdado da PR 015
-A PR 015 corrigiu a materialização real e gravação segura de arquivos no filesystem pelo Patch Engine após a aprovação de uma PatchProposal. No entanto, após os arquivos serem criados ou alterados no disco, o FluxoraV1 ainda não interagia com o controle de versão do projeto para registrar o snapshot Git da missão. Os arquivos eram simplesmente deixados como modificados/não rastreados (`git status --short` mostrando arquivos com `??` ou `M`), sem branch local ou commit local correspondentes.
+A PR 015 corrigiu a materialização real e gravação segura de arquivos no filesystem pelo Patch Engine após a aprovação de uma PatchProposal. No entanto, após os arquivos serem criados ou alterados no disco, o Fluxora ainda não interagia com o controle de versão do projeto para registrar o snapshot Git da missão. Os arquivos eram simplesmente deixados como modificados/não rastreados (`git status --short` mostrando arquivos com `??` ou `M`), sem branch local ou commit local correspondentes.
 
 ## 3. Por que o Commit Local Controlado é Necessário
 Sem commits locais automáticos ou guiados:
@@ -66,7 +66,7 @@ Antes de executar qualquer comando de escrita, `git_commit_patch` realiza valida
    cd /tmp/fluxora-git-commit-test
    git init
    ```
-2. Adicione o projeto no FluxoraV1 apontando para `/tmp/fluxora-git-commit-test`.
+2. Adicione o projeto no Fluxora apontando para `/tmp/fluxora-git-commit-test`.
 3. Execute uma missão que aplique alterações.
 4. Após aplicar o patch, clique em **Criar commit local**, escolha criar branch e clique em confirmar.
 5. Verifique no terminal:

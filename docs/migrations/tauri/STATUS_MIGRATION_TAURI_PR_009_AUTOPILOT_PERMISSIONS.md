@@ -3,7 +3,7 @@
 ## 1. Objetivo da PR 009
 
 Criar a **base do piloto automático com permissões por
-projeto** do FluxoraV1. Esta PR entrega a infraestrutura que
+projeto** do Fluxora. Esta PR entrega a infraestrutura que
 permite configurar, por projeto, se uma missão roda em modo
 `assistido`, `propositivo` ou `piloto-automatico`, com
 permissões conservadoras e aprovações operacionais reais.
@@ -855,10 +855,10 @@ diretamente para evitar a camada de adaptação.
 
 Onde `app_data_dir` é resolvido pelo Tauri em runtime.
 
-No Linux, com o identificador atual `com.fluxora.v1`, a
+No Linux, com o identificador atual `com.fluxora`, a
 localização esperada tende a ser equivalente a:
 
-`~/.local/share/com.fluxora.v1/fluxora/permissions.json`
+`~/.local/share/com.fluxora/fluxora/permissions.json`
 
 ## 16. Como aprovações são persistidas
 
@@ -904,7 +904,7 @@ localização esperada tende a ser equivalente a:
 
 `<app_data_dir>/fluxora/approvals.json`
 
-No Linux: `~/.local/share/com.fluxora.v1/fluxora/approvals.json`.
+No Linux: `~/.local/share/com.fluxora/fluxora/approvals.json`.
 
 ## 18. Como jobs/fila funcionam
 
@@ -1314,9 +1314,9 @@ const recent = await window.fluxora.events.listRecent({ limit: 50 });
 
 // 10) Verificar persistência
 // Linux:
-//   cat ~/.local/share/com.fluxora.v1/fluxora/permissions.json
-//   cat ~/.local/share/com.fluxora.v1/fluxora/approvals.json
-//   cat ~/.local/share/com.fluxora.v1/fluxora/missions.json
+//   cat ~/.local/share/com.fluxora/fluxora/permissions.json
+//   cat ~/.local/share/com.fluxora/fluxora/approvals.json
+//   cat ~/.local/share/com.fluxora/fluxora/missions.json
 ```
 
 ### 24.3 Health-check dos novos engines
@@ -1343,7 +1343,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
 | `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` | OK, sem warnings |
 | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` | OK, 33/33 testes passando (5 voice + 6 missions + 11 providers + 3 approvals + 8 permissions) |
 | `pnpm test` | 284 passando, 6 falhando (mesmas preexistentes `ThemeTokens` + `VoiceCommandModal`); **nenhuma regressão** |
-| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~0.4s (rebuild incremental) → binário `target/debug/fluxora_v1` inicia. Logs do Mission Engine, Permissions Engine e Approvals Engine: carregadas 0 missão(ões), 0 política(s), 0 aprovação(ões). Nenhum loop, nenhum erro de runtime. |
+| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~0.4s (rebuild incremental) → binário `target/debug/fluxora` inicia. Logs do Mission Engine, Permissions Engine e Approvals Engine: carregadas 0 missão(ões), 0 política(s), 0 aprovação(ões). Nenhum loop, nenhum erro de runtime. |
 
 ## 26. Resultado de typecheck/build/cargo check/dev/test
 

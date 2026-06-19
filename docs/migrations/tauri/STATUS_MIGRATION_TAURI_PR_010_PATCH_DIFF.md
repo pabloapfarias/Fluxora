@@ -3,7 +3,7 @@
 ## 1. Objetivo da PR 010
 
 Adicionar a **base de aplicação controlada de patch/diff** do
-FluxoraV1. Esta PR entrega a infraestrutura que permite que
+Fluxora. Esta PR entrega a infraestrutura que permite que
 missões proponham alterações em formato estruturado
 (`fluxora_patch` na resposta do provider), salvem essas
 propostas, exijam aprovação explícita quando a política do
@@ -665,10 +665,10 @@ botões Aprovar/Rejeitar funcionam via `approvals.approve`
 
 Onde `app_data_dir` é resolvido pelo Tauri em runtime.
 
-No Linux, com o identificador atual `com.fluxora.v1`, a
+No Linux, com o identificador atual `com.fluxora`, a
 localização esperada tende a ser equivalente a:
 
-`~/.local/share/com.fluxora.v1/fluxora/patches.json`
+`~/.local/share/com.fluxora/fluxora/patches.json`
 
 ## 14. Como o parser `fluxora_patch` funciona
 
@@ -1116,10 +1116,10 @@ const recent = await window.fluxora.events.listRecent({ limit: 100 });
 
 // 13) Verificar persistência
 // Linux:
-//   cat ~/.local/share/com.fluxora.v1/fluxora/patches.json
-//   cat ~/.local/share/com.fluxora.v1/fluxora/approvals.json
-//   cat ~/.local/share/com.fluxora.v1/fluxora/missions.json
-//   cat ~/.local/share/com.fluxora.v1/fluxora/permissions.json
+//   cat ~/.local/share/com.fluxora/fluxora/patches.json
+//   cat ~/.local/share/com.fluxora/fluxora/approvals.json
+//   cat ~/.local/share/com.fluxora/fluxora/missions.json
+//   cat ~/.local/share/com.fluxora/fluxora/permissions.json
 ```
 
 ### 22.3 Cenários de erro (validação manual)
@@ -1190,7 +1190,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
 | `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` | OK, sem warnings |
 | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` | OK, 46/46 testes passando (12 novos do patches) |
 | `pnpm test` | 284 passando, 6 falhando (mesmas preexistentes `ThemeTokens` + `VoiceCommandModal`); **nenhuma regressão** |
-| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~14s (build inicial) → binário `target/debug/fluxora_v1` inicia. Logs do Mission Engine, Permissions Engine, Approvals Engine e Patch Engine: carregadas 0 missão(ões), 0 política(s), 0 aprovação(ões), 0 proposta(s) de patch. Nenhum loop, nenhum erro de runtime. |
+| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~14s (build inicial) → binário `target/debug/fluxora` inicia. Logs do Mission Engine, Permissions Engine, Approvals Engine e Patch Engine: carregadas 0 missão(ões), 0 política(s), 0 aprovação(ões), 0 proposta(s) de patch. Nenhum loop, nenhum erro de runtime. |
 
 ## 24. Resultado de typecheck/build/cargo check/dev/test
 

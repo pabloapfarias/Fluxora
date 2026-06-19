@@ -2,7 +2,7 @@
 
 ## 1. Objetivo da PR 008
 
-Criar o **primeiro Mission Engine real do FluxoraV1** em
+Criar o **primeiro Mission Engine real do Fluxora** em
 Rust/Tauri, conectando projetos reais, filesystem/Git reais,
 Provider Engine próprio (PR 007) e o barramento de eventos real
 (PR 005).
@@ -730,10 +730,10 @@ nunca aparece em eventos nem no resultado retornado).
 
 Onde `app_data_dir` é resolvido pelo Tauri em runtime.
 
-No Linux, com o identificador atual `com.fluxora.v1`, a
+No Linux, com o identificador atual `com.fluxora`, a
 localização esperada tende a ser equivalente a:
 
-`~/.local/share/com.fluxora.v1/fluxora/missions.json`
+`~/.local/share/com.fluxora/fluxora/missions.json`
 
 ## 14. Como contexto do projeto é coletado
 
@@ -1060,7 +1060,7 @@ const events = await window.fluxora.events.list(run.id);
 // → WorkflowEvent[] (convertido de MissionLog)
 
 // 9) Verificar persistência
-// Linux: cat ~/.local/share/com.fluxora.v1/fluxora/missions.json
+// Linux: cat ~/.local/share/com.fluxora/fluxora/missions.json
 
 // 10) Cleanup (apenas dev/debug)
 await window.fluxora.missions.clear();
@@ -1088,7 +1088,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
 | `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` | OK, sem warnings |
 | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` | OK, 21/21 testes passando (5 voice + 11 providers + 5 missions novos) |
 | `pnpm test` | 284 passando, 6 falhando (mesmas preexistentes `ThemeTokens` + `VoiceCommandModal`); **nenhuma regressão** |
-| `pnpm dev` (com timeout 60s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~0.4s (rebuild incremental) → binário `target/debug/fluxora_v1` inicia. Log do Mission Engine: `[fluxora missions] carregadas 0 missão(ões) e 0 log(s)`. Nenhum loop, nenhum erro de runtime. |
+| `pnpm dev` (com timeout 60s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~0.4s (rebuild incremental) → binário `target/debug/fluxora` inicia. Log do Mission Engine: `[fluxora missions] carregadas 0 missão(ões) e 0 log(s)`. Nenhum loop, nenhum erro de runtime. |
 
 ## 21. Resultado de typecheck/build/cargo check/dev/test
 

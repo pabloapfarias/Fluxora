@@ -1,7 +1,7 @@
 # STATUS MIGRATION TAURI PR 014.2 — Execution UI Hotfix
 
 ## 1. Objetivo da Hotfix
-Ajustar e corrigir a usabilidade e estabilidade visual da tela de execução real do FluxoraV1. O principal objetivo é garantir que o usuário consiga acompanhar de forma clara o progresso do pipeline de agentes (Planner, Developer, QA, Finalizer), seus status, horários, resumos de saída e o resultado final.
+Ajustar e corrigir a usabilidade e estabilidade visual da tela de execução real do Fluxora. O principal objetivo é garantir que o usuário consiga acompanhar de forma clara o progresso do pipeline de agentes (Planner, Developer, QA, Finalizer), seus status, horários, resumos de saída e o resultado final.
 
 ## 2. Problema Visual Observado
 Na tela "Fluxo de Execução (Real)", os cards apresentavam sérios problemas de usabilidade e visualização:
@@ -15,21 +15,21 @@ Na tela "Fluxo de Execução (Real)", os cards apresentavam sérios problemas de
 Os testes automatizados preexistentes focavam em validações lógicas e estruturais (presença de nós HTML com as classes CSS corretas, verificação de dados de mock no DOM e estados de conclusão de promessas/jobs). Eles não realizavam testes visuais baseados em renderização de layouts (visual regression tests), falhando em detectar a sobreposição de elementos causada por flexbox sem gap e falta de truncamento de texto longo.
 
 ## 4. Componentes Alterados
-- **[desktopBridge.ts](file:///home/pablo/projects/FluxoraV1/apps/desktop/src/services/desktopBridge.ts)**:
+- **[desktopBridge.ts](file:///home/pablo/projects/Fluxora/apps/desktop/src/services/desktopBridge.ts)**:
   - Adicionados os campos `name` e `type` a `toLegacyAgentStepOutput` e `buildSyntheticSteps` para total compatibilidade com `WorkflowStep` sem precisar alterar os schemas centrais em `@fluxora/shared`.
   - Mapeamento robusto para exibir o erro do step falho no campo `output` caso os demais campos de texto estejam vazios.
-- **[ExecutionFlowCard.tsx](file:///home/pablo/projects/FluxoraV1/apps/desktop/src/components/overview/ExecutionFlowCard.tsx)**:
+- **[ExecutionFlowCard.tsx](file:///home/pablo/projects/Fluxora/apps/desktop/src/components/overview/ExecutionFlowCard.tsx)**:
   - Removido `useNavigate` interno para evitar falhas em testes unitários que renderizam o componente fora de um contexto `<Router>`.
   - Substituição da timeline horizontal comprimida baseada em flexbox por um **Grid Responsivo** (`grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4`).
   - Implementação de tratamento completo de estados com badges, cores semânticas bem delimitadas (sem grandes blocos sólidos de cor) e suporte para 5 estados: `pending`, `running`, `completed`, `failed` e `skipped`.
   - Truncamento dos resumos com `WebkitLineClamp: 3` nativo no CSS para prevenção de transbordo de textos de agentes.
-- **[AgentStepOutputPanel.tsx](file:///home/pablo/projects/FluxoraV1/apps/desktop/src/components/agents/AgentStepOutputPanel.tsx)**:
+- **[AgentStepOutputPanel.tsx](file:///home/pablo/projects/Fluxora/apps/desktop/src/components/agents/AgentStepOutputPanel.tsx)**:
   - Adicionado suporte ao prop `initialOpenStepId` para focar/expandir o accordion correspondente quando o usuário clica em "Detalhes" a partir da timeline.
   - Implementação de rolagem suave (`scrollIntoView` suave) até o step aberto.
-- **[ExecutionDetailPage.tsx](file:///home/pablo/projects/FluxoraV1/apps/desktop/src/pages/ExecutionDetailPage.tsx)**:
+- **[ExecutionDetailPage.tsx](file:///home/pablo/projects/Fluxora/apps/desktop/src/pages/ExecutionDetailPage.tsx)**:
   - Importação e renderização de `ExecutionFlowCard` no topo da página de detalhes.
   - Sincronização automática do estado de exibição usando query parameters (`tab` e `step`), permitindo que a seleção na timeline expanda o agente certo na aba de agentes.
-- **[OverviewPage.tsx](file:///home/pablo/projects/FluxoraV1/apps/desktop/src/pages/OverviewPage.tsx)**:
+- **[OverviewPage.tsx](file:///home/pablo/projects/Fluxora/apps/desktop/src/pages/OverviewPage.tsx)**:
   - Passagem de prop `onSelectStep` configurando a navegação da cockpit view para a visualização detalhada.
 
 ## 5. Causa Raiz do Layout Quebrado

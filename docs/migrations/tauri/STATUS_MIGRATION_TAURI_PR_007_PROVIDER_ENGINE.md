@@ -2,7 +2,7 @@
 
 ## 1. Objetivo da PR 007
 
-Criar o **Provider Engine próprio do FluxoraV1** em Rust/Tauri,
+Criar o **Provider Engine próprio do Fluxora** em Rust/Tauri,
 eliminando a dependência conceitual do OpenCode CLI como
 intermediário para chamadas aos provedores de IA. Esta PR entrega
 apenas a **infraestrutura de providers** — sem agentes reais,
@@ -74,7 +74,7 @@ esses campos no array `agents` em memória. O fallback
 
 No Electron legado, o adapter `@fluxora/opencode-adapter`
 executava o binário OpenCode CLI e parseava o JSON de saída.
-No FluxoraV1, esse caminho nunca foi portado — toda a fachada
+No Fluxora, esse caminho nunca foi portado — toda a fachada
 `window.fluxora.opencode.*` aponta para o mock do
 `mock-api.ts`. Esta PR substitui a dependência conceitual
 desse adapter (sem reintroduzir CLI externo) por um motor
@@ -357,10 +357,10 @@ provavelmente junto do Piloto Automático (PR 009+).
 
 Onde `app_data_dir` é resolvido pelo Tauri em runtime.
 
-No Linux, com o identificador atual `com.fluxora.v1`, a
+No Linux, com o identificador atual `com.fluxora`, a
 localização esperada tende a ser equivalente a:
 
-`~/.local/share/com.fluxora.v1/fluxora/providers.json`
+`~/.local/share/com.fluxora/fluxora/providers.json`
 
 ## 13. Como API keys são tratadas
 
@@ -580,7 +580,7 @@ const recent = await window.fluxora.events.listRecent({
 // → [FluxoraEvent { type: "provider/test-completed", ... }]
 
 // 7) Verificar persistência
-// Linux: cat ~/.local/share/com.fluxora.v1/fluxora/providers.json
+// Linux: cat ~/.local/share/com.fluxora/fluxora/providers.json
 
 // 8) Verificar que opencode.getCatalog agora reflete o Provider Engine
 const catalog = await window.fluxora.opencode.getCatalog();
@@ -618,7 +618,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
 | `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` | OK, sem warnings |
 | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` | OK, 16/16 testes passando (5 voice + 11 providers novos) |
 | `pnpm test` | 284 passando, 6 falhando (mesmas preexistentes `ThemeTokens` + `VoiceCommandModal`); **nenhuma regressão** |
-| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~10s (rebuild incremental) → binário `target/debug/fluxora_v1` inicia. Nenhum loop, nenhum erro de runtime. |
+| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~10s (rebuild incremental) → binário `target/debug/fluxora` inicia. Nenhum loop, nenhum erro de runtime. |
 
 ## 20. Resultado de typecheck/build/cargo check/dev/test
 

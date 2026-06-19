@@ -2,7 +2,7 @@
 
 ## 1. Objetivo da PR 014
 
-Eliminar divergências entre `AgentsPage`, `Mission Engine`, diagnóstico da missão, recomendação por stack e execução real. O FluxoraV1 passa a ter uma única fonte de verdade para:
+Eliminar divergências entre `AgentsPage`, `Mission Engine`, diagnóstico da missão, recomendação por stack e execução real. O Fluxora passa a ter uma única fonte de verdade para:
 
 - Providers reais (`providers.json`).
 - Modelo padrão de execução.

@@ -1,4 +1,4 @@
-// PR 009 — Permissions Engine do FluxoraV1.
+// PR 009 — Permissions Engine do Fluxora.
 //
 // Cria a infraestrutura de permissões por projeto que prepara o
 // terreno para o piloto automático. Esta PR entrega:

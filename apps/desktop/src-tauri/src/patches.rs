@@ -1,4 +1,4 @@
-// PR 010 — Patch Engine do FluxoraV1.
+// PR 010 — Patch Engine do Fluxora.
 //
 // Cria a infraestrutura de propostas de patch/diff que prepara
 // o terreno para a aplicação controlada de alterações em

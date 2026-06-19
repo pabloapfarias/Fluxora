@@ -1,4 +1,4 @@
-// PR 007 — Provider Engine próprio do FluxoraV1
+// PR 007 — Provider Engine próprio do Fluxora
 //
 // Cria um motor de providers em Rust/Tauri, eliminando a
 // dependência conceitual de intermediário externo para

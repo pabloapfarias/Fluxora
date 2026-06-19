@@ -33,9 +33,9 @@ Resumo tecnico do acoplamento original:
 - O fallback browser ja existia em `apps/desktop/src/api/mock-api.ts`.
 - O backend Electron concentrava persistencia, Git, OpenCode, audio e eventos.
 
-## 3. O que foi criado no FluxoraV1
+## 3. O que foi criado no Fluxora
 
-- Novo workspace em `/home/pablo/projects/FluxoraV1`
+- Novo workspace em `/home/pablo/projects/Fluxora`
 - Copia controlada da UI existente de `apps/desktop`
 - Pacotes preservados para o frontend compilar:
   - `packages/shared`
@@ -186,7 +186,7 @@ Comentarios de TODO esperados para fases seguintes:
 
 ## 10. Quais comandos foram executados para validacao
 
-Executados em `/home/pablo/projects/FluxoraV1`:
+Executados em `/home/pablo/projects/Fluxora`:
 
 ```bash
 pnpm install

@@ -79,7 +79,7 @@ const workflowEventListeners = new Set<(event: WorkflowEvent) => void>();
 const jobListeners = new Set<(job: BackgroundWorkflowJob) => void>();
 const approvalListeners = new Set<(approval: Approval) => void>();
 
-// PR 005 — Barramento de eventos do FluxoraV1 (fallback do mock).
+// PR 005 — Barramento de eventos do Fluxora (fallback do mock).
 // Mantém um ring buffer em memória e um Set de listeners que recebem
 // o `FluxoraEvent` gerado localmente. Fora do runtime Tauri, o
 // `desktopBridge` roteia `events.subscribe`/`events.emitDiagnostic`/
@@ -1085,7 +1085,7 @@ export function createMockAPI(): FluxoraAPI {
       onWorkflowEvent: (callback: (event: WorkflowEvent) => void) => subscribe(workflowEventListeners, callback),
       onJobUpdated: (callback: (job: BackgroundWorkflowJob) => void) => subscribe(jobListeners, callback),
       onApprovalChange: (callback: (approval: Approval) => void) => subscribe(approvalListeners, callback),
-      // PR 005 — Barramento real do FluxoraV1 (fallback mock fora do
+      // PR 005 — Barramento real do Fluxora (fallback mock fora do
       // runtime Tauri). Mantém a mesma forma do barramento Tauri para
       // que o `desktopBridge` apenas roteie.
       subscribe: (callback: (event: FluxoraEvent) => void) =>

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "FluxoraV1",
+  "productName": "Fluxora",
   "version": "0.1.0",
-  "identifier": "com.fluxora.v1",
+  "identifier": "com.fluxora",
   "build": {
     "beforeDevCommand": "pnpm --filter @fluxora/desktop dev",
     "beforeBuildCommand": "pnpm build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "FluxoraV1",
+        "title": "Fluxora",
         "width": 1400,
         "height": 900,
         "minWidth": 1000,

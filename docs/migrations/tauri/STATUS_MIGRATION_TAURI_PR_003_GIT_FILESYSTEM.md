@@ -29,7 +29,7 @@ Criado nesta PR:
 
 `README.md` principal da raiz foi preservado intacto.
 
-Como o projeto FluxoraV1 ainda não estava em um repositório Git,
+Como o projeto Fluxora ainda não estava em um repositório Git,
 foi usado `mv` simples (não `git mv`).
 
 ## 3. Estado herdado da PR 002
@@ -344,7 +344,7 @@ e árvores por padrão:
 
 ## 13. Quais partes ainda usam mock
 
-Ainda usam mock no FluxoraV1 (além do fallback fora do runtime
+Ainda usam mock no Fluxora (além do fallback fora do runtime
 Tauri):
 
 - `workflows.*`
@@ -370,7 +370,7 @@ permanecem mockados.
 
 ## 14. Quais comandos foram executados para validação
 
-Executados em `/home/pablo/projects/FluxoraV1`:
+Executados em `/home/pablo/projects/Fluxora`:
 
 ```bash
 pnpm install
@@ -398,7 +398,7 @@ cd apps/desktop/src-tauri && cargo check
   foram causadas por esta PR
 - `pnpm --filter @fluxora/desktop tauri:build`: **sucesso
   completo**. Compilou Rust em release, gerou o binário
-  `fluxora_v1` (15 MiB) e produziu os bundles `.deb`, `.rpm`
+  `fluxora` (15 MiB) e produziu os bundles `.deb`, `.rpm`
   e `.AppImage`. Diferente da PR 002, o empacotamento Linux
   não falhou nesta PR
 - `cargo check`: sucesso, sem warnings

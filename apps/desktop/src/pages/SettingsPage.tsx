@@ -291,7 +291,7 @@ export function SettingsPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
           <InfoRow label="Modo" value="Desenvolvimento" />
           <InfoRow label="Armazenamento" value="SQLite local + JSON local" />
-          <InfoRow label="Versão do app" value="FluxoraV1 Tauri" />
+          <InfoRow label="Versão do app" value="Fluxora Tauri" />
         </div>
       </div>
 

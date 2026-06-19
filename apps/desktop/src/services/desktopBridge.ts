@@ -86,7 +86,7 @@ type ListRecentInput = {
   type?: string;
 };
 
-/** Canal único do barramento de eventos do FluxoraV1 no Tauri. */
+/** Canal único do barramento de eventos do Fluxora no Tauri. */
 const FLUXORA_EVENT_CHANNEL = "fluxora-event";
 
 function isTauriRuntime() {
@@ -282,7 +282,7 @@ export async function diffProjectFile(
 // ---------------------------------------------------------------------------
 //
 // Esta seção implementa a base real do barramento de eventos do
-// FluxoraV1. Em runtime Tauri, escuta o canal único `fluxora-event`
+// Fluxora. Em runtime Tauri, escuta o canal único `fluxora-event`
 // e despacha para todos os assinantes locais. Fora do runtime Tauri
 // (modo navegador/Vite dev), o fallback é o ring buffer e os
 // listeners do `mock-api.ts`, com a mesma forma de `FluxoraEvent`.
@@ -1449,7 +1449,7 @@ async function getAgentStepTauri(
 // Providers (PR 007)
 // ---------------------------------------------------------------------------
 //
-// Esta seção implementa o Provider Engine próprio do FluxoraV1.
+// Esta seção implementa o Provider Engine próprio do Fluxora.
 // Em runtime Tauri, delega para o backend Rust real. Fora do
 // runtime Tauri (modo navegador/Vite dev), cai no fallback do
 // `mock-api.ts` (que devolve lista vazia + respostas simples).
@@ -2359,7 +2359,7 @@ export function createDesktopBridge(): FluxoraAPI {
       onWorkflowEvent: mock.events.onWorkflowEvent.bind(mock.events),
       onJobUpdated: mock.events.onJobUpdated.bind(mock.events),
       onApprovalChange: mock.events.onApprovalChange.bind(mock.events),
-      // PR 005 — Métodos do barramento real do FluxoraV1. Em
+      // PR 005 — Métodos do barramento real do Fluxora. Em
       // runtime Tauri, escutam o canal `fluxora-event` emitido
       // pelo backend Rust. Fora do runtime Tauri, caem no ring
       // buffer local do `mock-api.ts`.

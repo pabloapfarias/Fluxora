@@ -1,4 +1,4 @@
-// PR 005 — Barramento de eventos do FluxoraV1
+// PR 005 — Barramento de eventos do Fluxora
 //
 // Define o tipo `FluxoraEvent` (a contraparte Rust do tipo em
 // `@fluxora/shared`), um ring buffer em memória para eventos recentes
@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-/// Canal único do barramento de eventos do FluxoraV1 no Tauri.
+/// Canal único do barramento de eventos do Fluxora no Tauri.
 /// O frontend escuta este canal via `@tauri-apps/api/event`.
 pub const FLUXORA_EVENT_CHANNEL: &str = "fluxora-event";
 

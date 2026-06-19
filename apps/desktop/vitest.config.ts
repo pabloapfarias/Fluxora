@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import path from "path";
 
-// Vitest runs directly on the Vite/React app shell in FluxoraV1.
+// Vitest runs directly on the Vite/React app shell in Fluxora.
 export default defineConfig({
   plugins: [react()],
   resolve: {

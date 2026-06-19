@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default desktop capability for FluxoraV1",
+  "description": "Default desktop capability for Fluxora",
   "windows": ["main"],
   "permissions": [
     "core:default",

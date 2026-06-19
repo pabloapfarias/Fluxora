@@ -1,12 +1,12 @@
 [package]
-name = "fluxora_v1"
+name = "fluxora"
 version = "0.1.0"
 description = "Fluxora desktop shell migrated from Electron to Tauri"
 authors = ["Pablo"]
 edition = "2021"
 
 [lib]
-name = "fluxora_v1_lib"
+name = "fluxora_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

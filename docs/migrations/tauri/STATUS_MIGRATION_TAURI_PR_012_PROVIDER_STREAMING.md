@@ -3,7 +3,7 @@
 ## 1. Objetivo da PR 012
 
 Adicionar **streaming OpenAI-compatible** ao Provider Engine do
-FluxoraV1, integrado ao Agent Engine da PR 011 e ao barramento
+Fluxora, integrado ao Agent Engine da PR 011 e ao barramento
 de eventos da PR 005, para que a UI receba progresso
 incremental em tempo real durante a execução dos agentes.
 
@@ -982,7 +982,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
 | `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` | OK, sem warnings |
 | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` | OK, 64/64 testes passando (10 novos do SSE parser + 1 fix preexistente) |
 | `pnpm test` | 284 passando, 6 falhando (mesmas preexistentes `ThemeTokens` + `VoiceCommandModal`); **nenhuma regressão** |
-| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~13s → binário `target/debug/fluxora_v1` inicia. Logs das 6 engines: missions, permissions, approvals, patches, agents, agent_steps. Nenhum loop, nenhum erro de runtime. |
+| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~13s → binário `target/debug/fluxora` inicia. Logs das 6 engines: missions, permissions, approvals, patches, agents, agent_steps. Nenhum loop, nenhum erro de runtime. |
 | `pnpm --filter @fluxora/desktop tauri:build` (com timeout 240s) | `cargo run --release` em ~1m 07s → 3 bundles (`.deb`, `.rpm`, `.AppImage`) em `apps/desktop/src-tauri/target/release/bundle/`. SIGTERM é do timeout; build já estava completo. |
 
 ## 19. Resultado de typecheck/build/cargo check/dev/test
@@ -1213,9 +1213,9 @@ Esta PR não iniciou nenhuma delas.
   permissions, approvals, patches, agents,
   agent_steps).
 - ✅ `pnpm --filter @fluxora/desktop tauri:build` gera
-  os 3 bundles (`FluxoraV1_0.1.0_amd64.deb`,
-  `FluxoraV1-0.1.0-1.x86_64.rpm`,
-  `FluxoraV1_0.1.0_amd64.AppImage`).
+  os 3 bundles (`Fluxora_0.1.0_amd64.deb`,
+  `Fluxora-0.1.0-1.x86_64.rpm`,
+  `Fluxora_0.1.0_amd64.AppImage`).
 - ✅ Nenhuma operação Git de escrita.
 - ✅ Nenhuma chamada a shell.
 - ✅ Nenhuma referência a Electron reintroduzida.

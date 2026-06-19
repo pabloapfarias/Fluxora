@@ -1,4 +1,4 @@
-// PR 011 — Agent Engine do FluxoraV1.
+// PR 011 — Agent Engine do Fluxora.
 //
 // Cria a infraestrutura real de agentes no backend Rust/Tauri,
 // substituindo os `AgentStepOutput` sintéticos (derivados dos logs

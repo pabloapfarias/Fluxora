@@ -1,7 +1,7 @@
 # STATUS_MIGRATION_TAURI_PR_015_REAL_FILE_CREATION_PATCH
 
 ## 1. Objetivo da PR 015
-Corrigir a materialização de arquivos criados/modificados por missões reais assistidas no FluxoraV1. O principal objetivo é garantir que propostas de patch geradas por missões reais sejam salvas de forma persistente, exibidas corretamente na UI, passem pelo fluxo de permissões e aprovação, e sejam aplicadas de forma atômica e real no disco no diretório do projeto ativo ao serem aprovadas.
+Corrigir a materialização de arquivos criados/modificados por missões reais assistidas no Fluxora. O principal objetivo é garantir que propostas de patch geradas por missões reais sejam salvas de forma persistente, exibidas corretamente na UI, passem pelo fluxo de permissões e aprovação, e sejam aplicadas de forma atômica e real no disco no diretório do projeto ativo ao serem aprovadas.
 
 ## 2. Sintoma Observado
 Quando o usuário executava uma missão real que exigia a criação de arquivos (como "Crie uma landingpage para uma corretora de seguros" ou "Crie uma página simples para um advogado"), os agentes Planner, Developer, QA e Finalizer apareciam na UI como concluídos com sucesso. No entanto, ao abrir o diretório do projeto ativo, nenhum arquivo havia sido realmente gerado ou modificado. A execução parecia apenas simular a construção sem alterar o disco.
@@ -33,7 +33,7 @@ Quando o Developer inclui o bloco `fluxora_patch` válido, o parser `extract_flu
 - Cria o registro de `PatchProposal` persistido no arquivo local `<app_data_dir>/fluxora/patches.json`.
 
 ## 8. Como a Aprovação é Criada
-Se a política de segurança do projeto para as ações propostas (`create-files`, `write-files`, `apply-patch`) estiver configurada como `ask` (padrão do FluxoraV1 para modo assistido):
+Se a política de segurança do projeto para as ações propostas (`create-files`, `write-files`, `apply-patch`) estiver configurada como `ask` (padrão do Fluxora para modo assistido):
 1. Uma `ExecutionApproval` correspondente é gerada no Approvals Engine com ação `apply-patch` e o `proposalId` em seu payload.
 2. A proposta de patch transiciona para o status `pending_approval` e vincula o `approvalId`.
 3. O evento `patch/approval-required` é emitido.
@@ -59,7 +59,7 @@ Se qualquer ação da proposta estiver com a decisão `deny` nas políticas do p
 - **Aprovação**: O `ExecutionDetailPage` exibe a aba de aprovação se houver uma aprovação vinculada à execução. Clicar em "Aprovar" invoca `workflows.approveFinal` que por sua vez chama `approvals.approve` do backend. O backend detecta a ação `apply-patch` e automaticamente executa a aplicação do patch (materializando os arquivos reais no diretório do projeto).
 
 ## 12. Como Validar no Diretório Real
-1. Execute uma missão assistida de criação de arquivo no FluxoraV1.
+1. Execute uma missão assistida de criação de arquivo no Fluxora.
 2. Acompanhe a timeline dos agentes até a consolidação final. A missão transicionará para `completed` com a fase `patch-pending-approval`.
 3. Verifique as abas "Arquivos" e "Aprovação" na tela de detalhes.
 4. Visualize o diff proposto dos arquivos a serem criados.

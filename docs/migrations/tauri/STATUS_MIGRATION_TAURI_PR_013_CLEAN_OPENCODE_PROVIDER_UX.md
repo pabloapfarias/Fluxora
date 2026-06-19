@@ -2,7 +2,7 @@
 
 ## 1. Objetivo da PR 013
 
-Remover OpenCode da UI ativa do FluxoraV1, eliminar UX de migração/legado e consolidar o Provider Engine próprio como única fonte de verdade para providers e modelos.
+Remover OpenCode da UI ativa do Fluxora, eliminar UX de migração/legado e consolidar o Provider Engine próprio como única fonte de verdade para providers e modelos.
 
 ## 2. Motivo da remoção do OpenCode da UI ativa
 

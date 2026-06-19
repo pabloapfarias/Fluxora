@@ -2,7 +2,7 @@
 
 ## 1. Objetivo da PR 005
 
-Criar a **base real do barramento de eventos do FluxoraV1** usando o
+Criar a **base real do barramento de eventos do Fluxora** usando o
 sistema de eventos do Tauri 2, preservando a superfície
 `window.fluxora.events.*` consumida pela UI React/TypeScript e
 preparando o terreno para o Mission Engine, Voice/Whisper, Provider
@@ -14,7 +14,7 @@ tornar possível esses dominios emitirem eventos reais para a UI.
 
 ## 2. Estado herdado da PR 004
 
-No início desta PR o `~/projects/FluxoraV1` já tinha:
+No início desta PR o `~/projects/Fluxora` já tinha:
 
 - Repositório Git local em `main` (PR 004)
 - `pnpm dev` na raiz abrindo o app desktop Tauri (sem loop)
@@ -474,7 +474,7 @@ possam emitir quando migrados.
 | `pnpm build` | OK — Vite 8 produziu `dist/` (801 KiB / 223 KiB gzip) |
 | `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` | OK, sem warnings |
 | `pnpm test` | 284 passando, 6 falhando (mesmas preexistentes das PRs 002..004) |
-| `pnpm dev` | `tauri dev` → Vite em `:1420` → Cargo compila → binário `target/debug/fluxora_v1` inicia. Nenhum loop, nenhum erro de runtime. |
+| `pnpm dev` | `tauri dev` → Vite em `:1420` → Cargo compila → binário `target/debug/fluxora` inicia. Nenhum loop, nenhum erro de runtime. |
 
 ### Falhas preexistentes em `pnpm test`
 

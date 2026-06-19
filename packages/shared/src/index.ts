@@ -42,7 +42,7 @@ export interface UpdateProjectInput {
  * consolidou o Agent Engine real em `FluxoraAgentRole`
  * (`planner` | `developer` | `qa` | `finalizer` | `custom`).
  * O tipo `AgentRole` continua existindo por compatibilidade
- * com mocks e adaptadores legados, mas a UI ativa do FluxoraV1
+ * com mocks e adaptadores legados, mas a UI ativa do Fluxora
  * não deve mais usar `backend-dev` / `frontend-dev` /
  * `mobile-dev` / `orchestrator` como agentes exigidos pela
  * missão. A readiness real (`MissionExecutionReadiness`) é a
@@ -1656,7 +1656,7 @@ export interface ValidatePathResult {
 // PR 005 — Contrato de evento do barramento real
 // ============================================================================
 //
-// O barramento do FluxoraV1 trafega por um único canal do Tauri
+// O barramento do Fluxora trafega por um único canal do Tauri
 // (`fluxora-event`) e usa `type` para diferenciar o significado de
 // cada evento. A UI consome via `window.fluxora.events.subscribe(...)`
 // e filtra por `event.type`.
@@ -1667,7 +1667,7 @@ export interface ValidatePathResult {
 // próximas PRs (Voice, Provider Engine, Mission Engine, Piloto
 // Automático) já podem assumir como existente.
 
-/** Origem do evento no FluxoraV1. */
+/** Origem do evento no Fluxora. */
 export type FluxoraEventSource =
   | "app"
   | "project"
@@ -1696,7 +1696,7 @@ export type FluxoraEventType =
 /**
  * Sub-tipos do `FluxoraEvent` quando `source === "voice"`.
  *
- * O barramento do FluxoraV1 trafega por um único canal do Tauri
+ * O barramento do Fluxora trafega por um único canal do Tauri
  * (`fluxora-event`). Para eventos de voz, o `type` segue o padrão
  * `voice/<kind>` e o `payload` traz metadados específicos do
  * provedor (provider, model, durationMs etc.).
@@ -1712,7 +1712,7 @@ export type VoiceEventType =
   | "voice/provider-tested"
   | "voice/settings-updated";
 
-/** Evento genérico do barramento do FluxoraV1. */
+/** Evento genérico do barramento do Fluxora. */
 export interface FluxoraEvent {
   /** Identificador único do evento. */
   id: string;
@@ -1740,7 +1740,7 @@ export interface FluxoraEvent {
 // PR 007 — Provider Engine próprio
 // ============================================================================
 //
-// Tipos do motor de providers do FluxoraV1. Substitui o antigo adaptador
+// Tipos do motor de providers do Fluxora. Substitui o antigo adaptador
 // externo como intermediário para chamadas a provedores de IA.
 // Este bloco define a superfície canônica (`AiProviderConfig`,
 // `AiModelInfo`, etc.) do Provider Engine.
@@ -2028,7 +2028,7 @@ export type ProviderEventPayload =
 // PR 008 — Mission Engine inicial
 // ============================================================================
 //
-// Define o vocabulário novo para missões no FluxoraV1. A UI
+// Define o vocabulário novo para missões no Fluxora. A UI
 // atual ainda consome `WorkflowRun` / `WorkflowEvent` (legado
 // do mock) e o `desktopBridge` faz a adaptação entre as duas
 // superfícies. Componentes novos podem usar `MissionRun` /
@@ -2292,7 +2292,7 @@ export interface CancelMissionJobInput {
 // PR 010 — Aplicação controlada de patch/diff
 // ============================================================================
 //
-// Esta camada adiciona o Patch Engine do FluxoraV1. Permite que
+// Esta camada adiciona o Patch Engine do Fluxora. Permite que
 // missões proponham alterações em formato estruturado
 // (bloco `fluxora_patch` na resposta do provider) e que essas
 // alterações sejam aplicadas de forma controlada, respeitando
@@ -2685,7 +2685,7 @@ export interface FluxoraAPI {
   // PR 007 — Provider Engine próprio
   // ============================================================================
   //
-  // Superfície canônica do Provider Engine do FluxoraV1.
+  // Superfície canônica do Provider Engine do Fluxora.
   providers: {
     /** Lista todos os providers configurados. */
     list(): Promise<AiProviderConfig[]>;
@@ -2739,11 +2739,11 @@ export interface FluxoraAPI {
     probeServer(): Promise<boolean>;
   };
   // ============================================================================
-  // PR 005 — Barramento de eventos do FluxoraV1 (Tauri event system)
+  // PR 005 — Barramento de eventos do Fluxora (Tauri event system)
   // ============================================================================
   //
   // Os métodos `subscribe`/`on`/`listRecent`/`emitDiagnostic`/`clearRecent`/
-  // `unsubscribe`/`off` formam a base real do barramento do FluxoraV1. Em
+  // `unsubscribe`/`off` formam a base real do barramento do Fluxora. Em
   // runtime Tauri, escutam o canal `fluxora-event` emitido pelo backend
   // Rust via `@tauri-apps/api/event`. Fora do runtime Tauri, voltam a
   // emitir localmente em memória, mantendo a UI funcional no modo
@@ -2757,7 +2757,7 @@ export interface FluxoraAPI {
     onJobUpdated(callback: (job: BackgroundWorkflowJob) => void): () => void;
     /** Listener legado: mudança em aprovação. Mock até o Mission Engine. */
     onApprovalChange(callback: (approval: Approval) => void): () => void;
-    /** Assina o barramento real de eventos do FluxoraV1. */
+    /** Assina o barramento real de eventos do Fluxora. */
     subscribe(callback: (event: FluxoraEvent) => void): () => void;
     /** Remove uma inscrição retornada por `subscribe`/`on`. */
     unsubscribe(unsub: () => void): void;

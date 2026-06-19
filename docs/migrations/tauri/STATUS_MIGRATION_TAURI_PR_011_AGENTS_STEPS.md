@@ -2,7 +2,7 @@
 
 ## 1. Objetivo da PR 011
 
-Criar a **base real de agentes do FluxoraV1** em Rust/Tauri,
+Criar a **base real de agentes do Fluxora** em Rust/Tauri,
 substituindo os `AgentStepOutput` sintéticos (derivados dos logs
 pelo `buildSyntheticSteps` da PR 008) por steps reais
 persistidos em
@@ -806,12 +806,12 @@ alteração de componente.
 
 Onde `app_data_dir` é resolvido pelo Tauri em runtime.
 
-No Linux, com o identificador atual `com.fluxora.v1`, a
+No Linux, com o identificador atual `com.fluxora`, a
 localização esperada tende a ser equivalente a:
 
 ```
-~/.local/share/com.fluxora.v1/fluxora/agents.json
-~/.local/share/com.fluxora.v1/fluxora/agent_steps.json
+~/.local/share/com.fluxora/fluxora/agents.json
+~/.local/share/com.fluxora/fluxora/agent_steps.json
 ```
 
 ## 16. Quais agentes padrão foram criados
@@ -1261,7 +1261,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
 | `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` | OK, sem warnings |
 | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` | OK, 54/54 testes passando (7 novos do agents) |
 | `pnpm test` | 284 passando, 6 falhando (mesmas preexistentes `ThemeTokens` + `VoiceCommandModal`); **nenhuma regressão** |
-| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~1.7s (rebuild incremental) → binário `target/debug/fluxora_v1` inicia. Logs do Agent Engine: `[fluxora agents] carregados 0 agente(s)` e `[fluxora agent_steps] carregados 0 step(s) de agente`. Nenhum loop, nenhum erro de runtime. |
+| `pnpm dev` (com timeout 90s) | `tauri dev` → Vite em `:1420` → Cargo compila em ~1.7s (rebuild incremental) → binário `target/debug/fluxora` inicia. Logs do Agent Engine: `[fluxora agents] carregados 0 agente(s)` e `[fluxora agent_steps] carregados 0 step(s) de agente`. Nenhum loop, nenhum erro de runtime. |
 
 ## 27. Resultado de typecheck/build/cargo check/dev/test
 

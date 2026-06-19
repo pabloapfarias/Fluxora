@@ -2,7 +2,7 @@
 
 ## 1. Problema encontrado
 
-A UI do FluxoraV1 continuava exibindo providers/modelos do
+A UI do Fluxora continuava exibindo providers/modelos do
 catálogo legado do OpenCode como se fossem a configuração real
 da aplicação. Na prática:
 

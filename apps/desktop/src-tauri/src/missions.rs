@@ -1,4 +1,4 @@
-// PR 008 — Mission Engine inicial do FluxoraV1.
+// PR 008 — Mission Engine inicial do Fluxora.
 // PR 009 — Piloto automático: scheduler/fila mínima e
 //          integração com o sistema de permissões por projeto.
 //
@@ -779,7 +779,7 @@ aplica alterações diretamente — apenas propõe.",
 // { ...JSON... }
 // ```
 //
-// O backend do FluxoraV1 extrai esse bloco, valida o JSON,
+// O backend do Fluxora extrai esse bloco, valida o JSON,
 // valida os paths/limites, e cria uma `PatchProposal` (que
 // pode virar uma `ExecutionApproval` se a política exigir).
 // A resposta textual (sem o bloco) continua sendo salva em

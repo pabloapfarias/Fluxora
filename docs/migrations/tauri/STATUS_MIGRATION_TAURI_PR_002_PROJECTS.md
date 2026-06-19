@@ -101,9 +101,9 @@ Os projetos sao salvos em:
 
 Onde `app_data_dir` e resolvido pelo Tauri em runtime.
 
-No Linux, com o identificador atual `com.fluxora.v1`, a localizacao esperada tende a ser algo equivalente a:
+No Linux, com o identificador atual `com.fluxora`, a localizacao esperada tende a ser algo equivalente a:
 
-`~/.local/share/com.fluxora.v1/fluxora/projects.json`
+`~/.local/share/com.fluxora/fluxora/projects.json`
 
 ## 10. Campos salvos para cada projeto
 
@@ -190,7 +190,7 @@ Na criacao/atualizacao:
 
 ## 13. Quais partes ainda usam mock
 
-Ainda usam mock no FluxoraV1:
+Ainda usam mock no Fluxora:
 
 - todo o restante fora de `projects.*`, como:
   - `workflows.*`
@@ -209,7 +209,7 @@ O proprio `projects.*` ainda usa fallback mock somente quando o app esta fora do
 
 ## 14. Quais comandos foram executados para validação
 
-Executados em `/home/pablo/projects/FluxoraV1`:
+Executados em `/home/pablo/projects/Fluxora`:
 
 ```bash
 pnpm install

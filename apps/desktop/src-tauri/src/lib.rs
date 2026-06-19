@@ -977,7 +977,7 @@ pub fn run() {
                 "app/ready",
                 "app",
                 "info",
-                Some("FluxoraV1 shell inicializado.".to_string()),
+                Some("Fluxora shell inicializado.".to_string()),
                 None,
                 None,
                 None,

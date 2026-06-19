@@ -20,14 +20,14 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   sem mexer em layout/tema/navegação. Avança também na organização
   da própria documentação, centralizando os status das PRs nesta pasta.
 - [PR 004 — Git baseline, controle de versão e comando dev](./STATUS_MIGRATION_TAURI_PR_004_GIT_BASELINE.md)
-  Inicializa o repositório Git local em `~/projects/FluxoraV1` com
+  Inicializa o repositório Git local em `~/projects/Fluxora` com
   branch `main`, cria `.gitignore` adequado para Tauri/React/pnpm/Rust,
   ajusta `pnpm dev` na raiz para abrir o app desktop Tauri (substituindo
   o atalho antigo que abria só o Vite) e remove o risco de loop no
   `beforeDevCommand` do `tauri.conf.json`. PR estritamente
   organizacional — nenhuma feature nova, nenhuma alteração de UI.
 - [PR 005 — Eventos reais via Tauri event system](./STATUS_MIGRATION_TAURI_PR_005_EVENTS.md)
-  Cria a base real do barramento de eventos do FluxoraV1: módulo
+  Cria a base real do barramento de eventos do Fluxora: módulo
   Rust `events.rs` com `FluxoraEvent` + ring buffer, canal único
   `fluxora-event` consumido pelo frontend via `@tauri-apps/api/event`,
   comandos `events_ping` / `events_emit_diagnostic` /
@@ -57,7 +57,7 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   `whisperLocal.*` (download) e persistência de áudio em disco
   permanecem mock — PR estritamente incremental.
 - [PR 007 — Provider Engine próprio](./STATUS_MIGRATION_TAURI_PR_007_PROVIDER_ENGINE.md)
-  Cria o motor de providers do FluxoraV1 em Rust/Tauri,
+  Cria o motor de providers do Fluxora em Rust/Tauri,
   eliminando a dependência conceitual do OpenCode CLI como
   intermediário para chamadas aos modelos de IA. Módulo
   `providers.rs` com `ProvidersState` persistido em
@@ -84,7 +84,7 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   sem tool calling, sem Mission Engine, sem agente real,
   sem piloto automático, sem storage seguro de secrets.
 - [PR 008 — Mission Engine inicial](./STATUS_MIGRATION_TAURI_PR_008_MISSION_ENGINE.md)
-  Cria o primeiro Mission Engine real do FluxoraV1 em
+  Cria o primeiro Mission Engine real do Fluxora em
   Rust/Tauri, conectando projetos reais, filesystem/Git
   reais, Provider Engine próprio (PR 007) e o barramento
   de eventos real (PR 005). Módulo `missions.rs` com
@@ -120,7 +120,7 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   scheduler, sem agente real, sem streaming, sem tool
   calling, sem storage seguro de secrets.
 - [PR 009 — Piloto automático com permissões por projeto](./STATUS_MIGRATION_TAURI_PR_009_AUTOPILOT_PERMISSIONS.md)
-  Cria a base real do piloto automático do FluxoraV1 em
+  Cria a base real do piloto automático do Fluxora em
   Rust/Tauri. Adiciona os módulos `permissions.rs` e
   `approvals.rs` no backend, integra o Mission Engine
   (PR 008) ao sistema de permissões por projeto,
@@ -165,7 +165,7 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   real de missões em `running`, sem tool calling, sem
   streaming, sem storage seguro de secrets.
 - [PR 010 — Apply patch/diff controlado](./STATUS_MIGRATION_TAURI_PR_010_PATCH_DIFF.md)
-  Adiciona o Patch Engine do FluxoraV1 em Rust/Tauri,
+  Adiciona o Patch Engine do Fluxora em Rust/Tauri,
   permitindo que missões proponham alterações em formato
   estruturado (`fluxora_patch` na resposta do provider) e
   que essas alterações sejam aplicadas de forma
@@ -204,7 +204,7 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   commands, sem tool calling, sem streaming, sem storage
   seguro de secrets.
 - [PR 011 — Agentes reais e steps detalhados](./STATUS_MIGRATION_TAURI_PR_011_AGENTS_STEPS.md)
-  Cria a base real de agentes do FluxoraV1 em Rust/Tauri.
+  Cria a base real de agentes do Fluxora em Rust/Tauri.
   Substitui os `AgentStepOutput` sintéticos (derivados
   dos logs pelo `buildSyntheticSteps` da PR 008) por
   steps reais persistidos em
@@ -297,7 +297,7 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   preexistentes em `pnpm test` (tema/voz) mantidas sem
   correção nesta PR.
 - [PR 013 — Limpeza OpenCode, providers reais e UX](./STATUS_MIGRATION_TAURI_PR_013_CLEAN_OPENCODE_PROVIDER_UX.md)
-  Remove OpenCode da UI ativa do FluxoraV1, elimina a rota
+  Remove OpenCode da UI ativa do Fluxora, elimina a rota
   antiga de laboratório, troca o cadastro de providers para
   fluxo real persistido em `providers.json`, limpa textos de
   migração/legado/Electron/mock da experiência principal e
@@ -328,7 +328,7 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   suave para detalhamento completo na aba Agentes ao selecionar qualquer card.
 - [PR 015 — Corrigir criação real de arquivos via patch aplicado](./STATUS_MIGRATION_TAURI_PR_015_REAL_FILE_CREATION_PATCH.md)
   Corrige a materialização de arquivos criados/modificados por missões reais assistidas
-  no FluxoraV1. O prompt do Developer e a montagem de mensagens foram estendidos com o
+  no Fluxora. O prompt do Developer e a montagem de mensagens foram estendidos com o
   esquema JSON do bloco `fluxora_patch`. O Mission Engine falha caso missões de criação
   não gerem patches, e a UI do desktopBridge foi ajustada para filtrar aprovações por missionId.
   Adiciona testes unitários para o parser de patches e gravação segura local no filesystem.

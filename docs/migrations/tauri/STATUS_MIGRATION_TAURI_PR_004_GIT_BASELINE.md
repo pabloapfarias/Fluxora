@@ -4,7 +4,7 @@
 
 Corrigir duas falhas de processo da migração do Fluxora para Tauri:
 
-1. Inicializar o controle de versão Git do projeto `~/projects/FluxoraV1`
+1. Inicializar o controle de versão Git do projeto `~/projects/Fluxora`
    (que ainda não era um repositório desde a PR 001).
 2. Restaurar a experiência simples de desenvolvimento que existia no
    Electron: rodar o app com `pnpm dev` na raiz do monorepo. Após esta
@@ -17,7 +17,7 @@ voz, providers, workflows ou agentes.
 
 ## 2. Motivo da PR
 
-Ao final da PR 003, o `~/projects/FluxoraV1` já tinha:
+Ao final da PR 003, o `~/projects/Fluxora` já tinha:
 
 - base Tauri funcional
 - `projects.*` real em Rust
@@ -47,7 +47,7 @@ A PR 004 resolve exatamente esses dois pontos, sem tocar em mais nada.
 
 ## 4. `.gitignore`
 
-Criado na raiz do projeto (`~/projects/FluxoraV1/.gitignore`),
+Criado na raiz do projeto (`~/projects/Fluxora/.gitignore`),
 cobrindo o que o stack atual (Tauri 2 + React 19 + Vite 8 + pnpm 11 +
 Rust stable) gera como artefato.
 
@@ -162,7 +162,7 @@ só o frontend web (com fallback mock), sem o shell Tauri.
 Na raiz do monorepo:
 
 ```bash
-cd ~/projects/FluxoraV1
+cd ~/projects/Fluxora
 pnpm install        # se ainda não instalou
 pnpm dev            # abre o app desktop Tauri em modo desenvolvimento
 ```
@@ -189,7 +189,7 @@ pnpm --filter @fluxora/desktop tauri:build
 
 ## 8. Validação do `pnpm dev`
 
-Executado em `~/projects/FluxoraV1`:
+Executado em `~/projects/Fluxora`:
 
 ```bash
 timeout 30s pnpm dev
@@ -207,7 +207,7 @@ $ vite
   ➜  Network: http://192.168.100.53:1420/
   ➜  Network: http://192.168.0.180:1420/
      Running DevCommand (`cargo  run --no-default-features --color always --`)
-        Info Watching /home/pablo/projects/FluxoraV1/apps/desktop/src-tauri for changes...
+        Info Watching /home/pablo/projects/Fluxora/apps/desktop/src-tauri for changes...
    Compiling equivalent v1.0.2
    Compiling hashbrown v0.17.1
    ... (Cargo começou a compilar normalmente)
@@ -256,7 +256,7 @@ Quatro commits locais na branch `main`, sem push remoto:
 2. `chore: make pnpm dev launch Tauri desktop` — ajusta scripts
    da raiz e `tauri.conf.json` para que `pnpm dev` abra o Tauri
    sem loop no `beforeDevCommand`.
-3. `chore: initialize FluxoraV1 Tauri migration baseline` —
+3. `chore: initialize Fluxora Tauri migration baseline` —
    baseline com todo o código-fonte acumulado das PRs 001..003
    (UI React/TS, backend Rust/Tauri, packages workspace, lockfiles).
 4. `docs: update PR 004 status with final commit hashes` — commit
@@ -335,7 +335,7 @@ Nenhuma delas foi iniciada nesta PR.
 
 ## 14. Resumo executivo
 
-- ✅ `~/projects/FluxoraV1` agora é um repositório Git local
+- ✅ `~/projects/Fluxora` agora é um repositório Git local
 - ✅ Branch inicial: `main`
 - ✅ `.gitignore` cobre Tauri + React + pnpm + Rust
 - ✅ Artefatos de build e secrets fora do versionamento

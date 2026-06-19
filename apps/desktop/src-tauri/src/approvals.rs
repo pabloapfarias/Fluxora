@@ -1,4 +1,4 @@
-// PR 009 — Aprovações operacionais do FluxoraV1.
+// PR 009 — Aprovações operacionais do Fluxora.
 //
 // Cria a infraestrutura de `ExecutionApproval` para a base do
 // piloto automático. Esta PR entrega:

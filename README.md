@@ -1,8 +1,8 @@
-# FluxoraV1
+# Fluxora
 
 > Desktop Tauri para executar missões com providers, agentes, permissões, aprovações, patches e streaming próprios.
 
-O FluxoraV1 usa motor próprio de providers, missões, agentes, permissões, aprovações, patches e streaming. A arquitetura atual não depende mais de OpenCode para catálogo, execução ou UX ativa.
+O Fluxora usa motor próprio de providers, missões, agentes, permissões, aprovações, patches e streaming. A arquitetura atual não depende mais de OpenCode para catálogo, execução ou UX ativa.
 
 ## Quick start
 

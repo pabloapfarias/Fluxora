@@ -648,7 +648,7 @@ pnpm dev   # roda `tauri:dev` que abre o app Tauri
   - Salvar
 - Verificar que `voice.json` foi criado em
   `<app_data_dir>/fluxora/voice.json` (em Linux:
-  `~/.local/share/com.fluxora.v1/fluxora/voice.json`)
+  `~/.local/share/com.fluxora/fluxora/voice.json`)
 - Push-to-talk: segurar Ctrl+Espaço
   - Falar algo
   - Soltar
@@ -688,7 +688,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
 | `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` | OK, sem warnings |
 | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib` | OK, 5/5 testes passando |
 | `pnpm test` | 284 passando, 6 falhando (mesmas preexistentes `ThemeTokens` + `VoiceCommandModal`) |
-| `pnpm dev` | `tauri dev` → Vite em `:1420` → Cargo compila (com `ureq`, `base64`) → binário `target/debug/fluxora_v1` inicia. Nenhum loop, nenhum erro de runtime. |
+| `pnpm dev` | `tauri dev` → Vite em `:1420` → Cargo compila (com `ureq`, `base64`) → binário `target/debug/fluxora` inicia. Nenhum loop, nenhum erro de runtime. |
 
 ## 20. Resultado de typecheck/build/cargo check/dev/test
 
