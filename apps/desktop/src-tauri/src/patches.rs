@@ -189,6 +189,12 @@ pub struct PatchProposalRecord {
     pub applied_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_written: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_missing: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1058,11 +1064,73 @@ pub fn patches_apply(
         return Err(error);
     }
 
+    let project_path_str = project_root.to_string_lossy().to_string();
+    let mut files_written = Vec::new();
+    let mut files_missing = Vec::new();
+    for file in &current.files {
+        if file.operation == "create" || file.operation == "modify" {
+            let normalized = match is_safe_path(&file.path) {
+                Ok(p) => p,
+                Err(_) => {
+                    files_missing.push(file.path.clone());
+                    continue;
+                }
+            };
+            let path = match resolve_under_project(&project_root, &normalized) {
+                Ok(p) => p,
+                Err(_) => {
+                    files_missing.push(file.path.clone());
+                    continue;
+                }
+            };
+            if path.exists() {
+                files_written.push(file.path.clone());
+            } else {
+                files_missing.push(file.path.clone());
+            }
+        }
+    }
+
+    if !files_missing.is_empty() {
+        let error_msg = format!("Arquivos ausentes após escrita: {}", files_missing.join(", "));
+        let truncated = truncate_error_message(&error_msg);
+        let updated = update_proposal(&state, &proposal_id, |p| {
+            p.status = PatchProposalStatus::Failed.as_str().to_string();
+            p.error = Some(truncated.clone());
+            p.files_written = Some(files_written.clone());
+            p.files_missing = Some(files_missing.clone());
+            p.project_path = Some(project_path_str.clone());
+        })
+        .ok_or_else(|| format!("Proposta {proposal_id} não encontrada."))?;
+        persist(&app)?;
+        emit_patch_event(
+            &app,
+            "patch/apply-failed",
+            "error",
+            &updated.project_id,
+            Some(&updated.mission_id),
+            Some(&updated.id),
+            &format!("Proposta de patch falhou na validação pós-apply: {}", error_msg),
+            Some(serde_json::json!({
+                "proposalId": &updated.id,
+                "filesApplied": applied_files,
+                "filesWritten": files_written,
+                "filesMissing": files_missing,
+                "projectPath": project_path_str,
+                "errorMessage": truncated,
+            })),
+        );
+        return Err(error_msg);
+    }
+
     let now = now_iso();
     let updated = update_proposal(&state, &proposal_id, |p| {
         p.status = PatchProposalStatus::Applied.as_str().to_string();
-        p.applied_at = Some(now);
+        p.applied_at = Some(now.clone());
         p.error = None;
+        p.files_written = Some(files_written.clone());
+        p.files_missing = Some(files_missing.clone());
+        p.project_path = Some(project_path_str.clone());
     })
     .ok_or_else(|| format!("Proposta {proposal_id} não encontrada."))?;
     persist(&app)?;
@@ -1077,6 +1145,10 @@ pub fn patches_apply(
         Some(serde_json::json!({
             "proposalId": &updated.id,
             "filesApplied": applied_files,
+            "filesWritten": files_written,
+            "filesMissing": files_missing,
+            "projectPath": project_path_str,
+            "appliedAt": now,
         })),
     );
     Ok(updated)
@@ -1119,6 +1191,9 @@ fn apply_one_file(project_root: &Path, file: &PatchFileChangeRecord) -> Result<(
                     .map_err(|error| format!("Falha ao criar diretório: {error}"))?;
             }
             write_atomic(&path, after.as_bytes())?;
+            if !path.exists() {
+                return Err(format!("Arquivo '{}' não foi criado no disco após apply", file.path));
+            }
         }
         PatchOperation::Modify => {
             let after = file.after_content.as_ref().ok_or_else(|| {
@@ -1138,6 +1213,9 @@ fn apply_one_file(project_root: &Path, file: &PatchFileChangeRecord) -> Result<(
                 }
             }
             write_atomic(&path, after.as_bytes())?;
+            if !path.exists() {
+                return Err(format!("Arquivo '{}' não foi criado no disco após apply", file.path));
+            }
         }
         PatchOperation::Delete => {
             if !path.exists() {
@@ -1414,6 +1492,9 @@ pub fn create_proposal_from_provider_text(
         updated_at: now,
         applied_at: None,
         error: None,
+        files_written: None,
+        files_missing: None,
+        project_path: None,
     };
     let state = app.state::<PatchesState>();
     let stored = upsert_proposal(&state, proposal);
@@ -1869,6 +1950,59 @@ mod tests {
         };
         let result_abs = apply_one_file(&project_dir, &file_change_abs);
         assert!(result_abs.is_err());
+
+        let _ = std::fs::remove_dir_all(&project_dir);
+    }
+
+    #[test]
+    fn parse_fluxora_patch_multiline_content() {
+        let text = r#"Here is the patch:
+```fluxora_patch
+{
+  "title": "Multiline test",
+  "summary": "Creating a multiline file",
+  "files": [
+    {
+      "path": "test_multiline.txt",
+      "operation": "create",
+      "afterContent": "line 1\nline 2\nline 3"
+    }
+  ]
+}
+```
+"#;
+        let extract = crate::missions::extract_fluxora_patch_block(text);
+        assert!(extract.files.is_some());
+        let files = extract.files.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].after_content.as_deref(), Some("line 1\nline 2\nline 3"));
+    }
+
+    #[test]
+    fn apply_one_file_fails_if_file_not_found_after_writing() {
+        let project_dir = std::env::current_dir().unwrap().join("target").join("test-project-fails-nonexistent");
+        if project_dir.exists() {
+            let _ = std::fs::remove_dir_all(&project_dir);
+        }
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        // Let's block creation of a nested file by placing a plain file at the parent folder's name
+        std::fs::write(project_dir.join("blocker"), "blocker content").unwrap();
+
+        let file_change = PatchFileChangeRecord {
+            path: "blocker/nested/file.txt".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("content".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        };
+
+        let result = apply_one_file(&project_dir, &file_change);
+        assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&project_dir);
     }

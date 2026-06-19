@@ -1434,34 +1434,11 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
     }
 
     // 7. Valida se nenhum patch foi gerado para missões de criação/alteração
-    let prompt_lower = running.prompt.to_lowercase();
-    let has_creation_verbs = prompt_lower.contains("crie")
-        || prompt_lower.contains("criar")
-        || prompt_lower.contains("cria")
-        || prompt_lower.contains("criação")
-        || prompt_lower.contains("edite")
-        || prompt_lower.contains("editar")
-        || prompt_lower.contains("edita")
-        || prompt_lower.contains("altere")
-        || prompt_lower.contains("alterar")
-        || prompt_lower.contains("altera")
-        || prompt_lower.contains("implemente")
-        || prompt_lower.contains("implementar")
-        || prompt_lower.contains("construa")
-        || prompt_lower.contains("construir")
-        || prompt_lower.contains("adicione")
-        || prompt_lower.contains("adicionar")
-        || prompt_lower.contains("escreva")
-        || prompt_lower.contains("escrever")
-        || prompt_lower.contains("modify")
-        || prompt_lower.contains("create")
-        || prompt_lower.contains("write")
-        || prompt_lower.contains("implement")
-        || prompt_lower.contains("build");
+    let has_creation_verbs = has_creation_request(&running.prompt);
 
     let final_text = if agents_result.patch_proposal_id.is_none() {
         if has_creation_verbs {
-            let err = "A missão pediu criação/alteração de arquivos, mas o Developer não retornou um bloco fluxora_patch válido. Nenhum arquivo foi criado.".to_string();
+            let err = "A missão pediu criação/alteração de arquivos, mas o Developer não retornou um bloco fluxora_patch válido após a tentativa de correção. Nenhum arquivo foi criado.".to_string();
             fail_mission(&app, &state, &running, &err, Some(&job_id));
             return Err(err);
         } else {
@@ -2018,6 +1995,39 @@ pub fn scheduler_cancel_job(
 // ---------------------------------------------------------------------------
 // Testes unitários
 // ---------------------------------------------------------------------------
+
+pub fn has_creation_request(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    lower.contains("crie")
+        || lower.contains("criar")
+        || lower.contains("cria")
+        || lower.contains("criação")
+        || lower.contains("edite")
+        || lower.contains("editar")
+        || lower.contains("edita")
+        || lower.contains("altere")
+        || lower.contains("alterar")
+        || lower.contains("altera")
+        || lower.contains("implemente")
+        || lower.contains("implementar")
+        || lower.contains("construa")
+        || lower.contains("construir")
+        || lower.contains("adicione")
+        || lower.contains("adicionar")
+        || lower.contains("escreva")
+        || lower.contains("escrever")
+        || lower.contains("gere")
+        || lower.contains("gerar")
+        || lower.contains("faça uma página")
+        || lower.contains("landing page")
+        || lower.contains("componente")
+        || lower.contains("arquivo")
+        || lower.contains("modify")
+        || lower.contains("create")
+        || lower.contains("write")
+        || lower.contains("implement")
+        || lower.contains("build")
+}
 
 #[cfg(test)]
 mod tests {

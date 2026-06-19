@@ -2376,6 +2376,9 @@ export interface PatchProposal {
   appliedAt?: string;
   /** Mensagem de erro quando `status === "failed"`. Nunca inclui API key. */
   error?: string;
+  filesWritten?: string[];
+  filesMissing?: string[];
+  projectPath?: string;
 }
 
 /** Input aceito por `patches_create` (criação de proposta). */

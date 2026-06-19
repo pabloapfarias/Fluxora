@@ -99,21 +99,20 @@ Responda com:\n\
 /// System prompt interno padrão do Developer (PR 011).
 pub(crate) const DEVELOPER_PROMPT: &str = "Você é o Developer do Fluxora.\n\
 Sua função é propor a solução com base no plano do Planner e no contexto do projeto.\n\
-Quando a missão pedir criar, editar, alterar, implementar, construir tela, landing page, componente, arquivo, página ou código, você DEVE incluir obrigatoriamente um bloco fluxora_patch ao final da resposta.\n\
-Não apenas descreva, planeje ou diga \"eu criaria\". Gere os arquivos reais no bloco fluxora_patch.\n\
+Quando a missão pedir criar, crie, implementar, implemente, construir, construa, gerar, gere, adicionar, adicione, alterar, altere, editar, edite, fazer uma página, faça uma página, landing page, componente, arquivo ou código, você DEVE retornar obrigatoriamente um bloco fluxora_patch ao final da resposta.\n\
+Não responda apenas com plano, não diga \"eu criaria\", e não diga que criou se não retornou o patch.\n\
 Não execute comandos.\n\
-Não faça commit.\n\
-Não use caminhos absolutos nem \"..\".\n\
-Não altere node_modules, .git, vendor, dist, build, target, .next, .cache, .turbo, out.\n\n\
+Não faça commit.\n\n\
 O bloco fluxora_patch deve seguir EXATAMENTE o formato JSON abaixo:\n\
 ```fluxora_patch\n\
 {{\n  \"title\": \"Título curto da alteração\",\n  \"summary\": \"Descrição do que será alterado\",\n  \"files\": [\n    {{\n      \"path\": \"caminho/relativo/arquivo.html\",\n      \"operation\": \"create\",\n      \"afterContent\": \"conteúdo completo do arquivo\"\n    }}\n  ]\n}}\n\
 ```\n\n\
-Regras para o bloco:\n\
-- Use apenas caminhos RELATIVOS ao projeto (sem \"..\", sem caminhos absolutos).\n\
-- operation deve ser \"create\", \"modify\" ou \"delete\".\n\
-- Para \"create\" e \"modify\", forneça o conteúdo final completo em afterContent.\n\
+Regras estritas:\n\
+- Use apenas caminhos RELATIVOS ao projeto (NUNCA use path absoluto, NUNCA use \"..\").\n\
+- operation deve ser \"create\", \"modify\" ou \"delete\". Para arquivos novos, use \"create\". Para alterações, use \"modify\".\n\
+- Para \"create\" e \"modify\", forneça o conteúdo final completo em afterContent (NUNCA use placeholders ou trechos incompletos).\n\
 - Para \"delete\", use operation: \"delete\" sem afterContent.\n\
+- NUNCA escreva ou altere arquivos em: .git, node_modules, vendor, dist, target, build, .next, .cache, .turbo, out.\n\
 - Para página simples em projeto vazio, crie pelo menos index.html, styles.css e script.js.\n\n\
 Responda com:\n\
 1. Solução proposta\n\
@@ -631,6 +630,14 @@ pub fn ensure_default_agents(app: &AppHandle) -> Vec<AgentConfigRecord> {
             Ok(g) => g,
             Err(_) => return Vec::new(),
         };
+        // Força atualização do prompt do desenvolvedor se o prompt atual divergir
+        if let Some(dev_agent) = guard.iter_mut().find(|a| a.id == "agent-developer") {
+            if dev_agent.system_prompt.as_deref() != Some(DEVELOPER_PROMPT) {
+                dev_agent.system_prompt = Some(DEVELOPER_PROMPT.to_string());
+                dev_agent.updated_at = now.clone();
+                needs_persist = true;
+            }
+        }
         // Verifica se já existe pelo menos um agente de cada
         // role padrão. Se sim, não recria.
         let have_planner = guard.iter().any(|a| a.role == "planner");
@@ -638,6 +645,9 @@ pub fn ensure_default_agents(app: &AppHandle) -> Vec<AgentConfigRecord> {
         let have_qa = guard.iter().any(|a| a.role == "qa");
         let have_finalizer = guard.iter().any(|a| a.role == "finalizer");
         if have_planner && have_developer && have_qa && have_finalizer {
+            if needs_persist {
+                let _ = persist_agents(app);
+            }
             return guard.clone();
         }
         if !have_planner {
@@ -1286,65 +1296,132 @@ pub fn run_mission_agents(
                     "developer" => {
                         // Verifica se há bloco fluxora_patch e
                         // cria a proposta via Patch Engine (PR 010).
-                        developer_output = Some(truncated.clone());
-                        developer_summary = Some(output_summary.clone());
-                        let extract = missions::extract_fluxora_patch_block(&truncated);
-                        if let (Some(files), Some(title)) = (&extract.files, &extract.title) {
-                            if !files.is_empty() {
-                                match crate::patches::create_proposal_from_provider_text(
-                                    app,
-                                    ctx.mission,
-                                    title.clone(),
-                                    extract.summary.clone(),
-                                    files.clone(),
-                                ) {
-                                    Ok((proposal, _log)) => {
-                                        developer_patch_proposal_id =
-                                            Some(proposal.id.clone());
+                        let mut final_truncated = truncated.clone();
+                        let mut final_output_summary = output_summary.clone();
+                        let mut extract = missions::extract_fluxora_patch_block(&final_truncated);
+                        let mut has_patch = extract.files.as_ref().map(|f| !f.is_empty()).unwrap_or(false) && extract.title.is_some();
+
+                        if !has_patch && missions::has_creation_request(ctx.user_prompt) {
+                            emit_agent_event(
+                                app,
+                                "agent/step-chunk",
+                                "info",
+                                "O Developer não retornou um bloco fluxora_patch válido. Tentando correção automática...",
+                                Some(ctx.mission.project_id.clone()),
+                                Some(ctx.mission.id.clone()),
+                                Some(agent.id.clone()),
+                                None,
+                            );
+
+                            let mut retry_messages = messages.clone();
+                            retry_messages.push(providers::ChatMessagePayload {
+                                role: "assistant".to_string(),
+                                content: final_truncated.clone(),
+                            });
+                            retry_messages.push(providers::ChatMessagePayload {
+                                role: "user".to_string(),
+                                content: "A resposta anterior não contém um bloco fluxora_patch válido.\n\
+Converta sua solução em um bloco fluxora_patch válido agora.\n\
+Retorne somente o bloco fluxora_patch.".to_string(),
+                            });
+
+                            let retry_result = execute_provider_chat_for_agent(
+                                app,
+                                &step_id,
+                                &ctx.mission.id,
+                                &ctx.mission.project_id,
+                                &agent.id,
+                                &agent.name,
+                                &agent.role,
+                                provider_id,
+                                model,
+                                &retry_messages,
+                                Some(2048),
+                            );
+
+                            match retry_result {
+                                Ok(chat) => {
+                                    let retry_truncated = truncate_output(&chat.text);
+                                    let retry_summary = summarize_text(&retry_truncated, 280);
+                                    let retry_extract = missions::extract_fluxora_patch_block(&retry_truncated);
+                                    let retry_has_patch = retry_extract.files.as_ref().map(|f| !f.is_empty()).unwrap_or(false) && retry_extract.title.is_some();
+                                    
+                                    if retry_has_patch {
+                                        final_truncated = retry_truncated;
+                                        final_output_summary = retry_summary;
+                                        extract = retry_extract;
+                                        has_patch = true;
+
+                                        // Atualiza o step com o novo texto de sucesso da retry
                                         let state = app.state::<AgentsState>();
-                                        let _ = update_step(
-                                            &state,
-                                            &step_id,
-                                            |s| {
-                                                if let Some(meta) = s.metadata.as_mut() {
-                                                    if let Some(obj) = meta.as_object_mut() {
-                                                        obj.insert(
-                                                            "proposalId".to_string(),
-                                                            serde_json::Value::String(
-                                                                proposal.id.clone(),
-                                                            ),
-                                                        );
-                                                        obj.insert(
-                                                            "proposalStatus".to_string(),
-                                                            serde_json::Value::String(
-                                                                proposal.status.clone(),
-                                                            ),
-                                                        );
-                                                        obj.insert(
-                                                            "filesCount".to_string(),
-                                                            serde_json::Value::Number(
-                                                                serde_json::Number::from(
-                                                                    proposal.files.len() as u64,
-                                                                ),
-                                                            ),
-                                                        );
-                                                    }
-                                                }
-                                            },
-                                        );
+                                        let _ = update_step(&state, &step_id, |s| {
+                                            s.output_text = Some(final_truncated.clone());
+                                            s.output_summary = Some(final_output_summary.clone());
+                                        });
                                         let _ = persist_agent_steps(app);
+                                    } else {
+                                        eprintln!("[fluxora agents] segunda tentativa não retornou patch válido.");
                                     }
-                                    Err(error) => {
-                                        eprintln!(
-                                            "[fluxora agents] patch proposal rejeitada: {error}"
-                                        );
-                                        // Não falhamos o step — o
-                                        // Developer respondeu OK,
-                                        // mas a proposta de patch
-                                        // não pôde ser criada. O
-                                        // erro fica registrado no
-                                        // log de missões.
-                                    }
+                                }
+                                Err(err) => {
+                                    eprintln!("[fluxora agents] erro na chamada de segunda tentativa: {err}");
+                                }
+                            }
+                        }
+
+                        developer_output = Some(final_truncated.clone());
+                        developer_summary = Some(final_output_summary.clone());
+
+                        if has_patch {
+                            let files = extract.files.unwrap();
+                            let title = extract.title.unwrap();
+                            match crate::patches::create_proposal_from_provider_text(
+                                app,
+                                ctx.mission,
+                                title.clone(),
+                                extract.summary.clone(),
+                                files.clone(),
+                            ) {
+                                Ok((proposal, _log)) => {
+                                    developer_patch_proposal_id =
+                                        Some(proposal.id.clone());
+                                    let state = app.state::<AgentsState>();
+                                    let _ = update_step(
+                                        &state,
+                                        &step_id,
+                                        |s| {
+                                            if let Some(meta) = s.metadata.as_mut() {
+                                                if let Some(obj) = meta.as_object_mut() {
+                                                    obj.insert(
+                                                        "proposalId".to_string(),
+                                                        serde_json::Value::String(
+                                                            proposal.id.clone(),
+                                                        ),
+                                                    );
+                                                    obj.insert(
+                                                        "proposalStatus".to_string(),
+                                                        serde_json::Value::String(
+                                                            proposal.status.clone(),
+                                                        ),
+                                                    );
+                                                    obj.insert(
+                                                        "filesCount".to_string(),
+                                                        serde_json::Value::Number(
+                                                            serde_json::Number::from(
+                                                                proposal.files.len() as u64,
+                                                            ),
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                        },
+                                    );
+                                    let _ = persist_agent_steps(app);
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "[fluxora agents] patch proposal rejeitada: {error}"
+                                    );
                                 }
                             }
                         }
@@ -1493,17 +1570,17 @@ Sua tarefa: criar um plano de ação detalhado. Não proponha patches.",
             "Missão do usuário: {prompt}\n\n\
 Contexto do projeto '{name}':\n{ctx}\n\n\
 Plano do Planner:\n{plan}\n\n\
-Sua tarefa: propor a solução. Quando a missão pedir criar, editar, alterar, implementar, construir tela, landing page, componente, arquivo, página ou código, você DEVE incluir obrigatoriamente um bloco fluxora_patch ao final da resposta no seguinte formato JSON:\n\n\
+Sua tarefa: propor a solução. Quando a missão pedir criar, crie, implementar, implemente, construir, construa, gerar, gere, adicionar, adicione, alterar, altere, editar, edite, fazer uma página, faça uma página, landing page, componente, arquivo ou código, você DEVE incluir obrigatoriamente um bloco fluxora_patch ao final da resposta no seguinte formato JSON:\n\n\
 ```fluxora_patch\n\
 {{\n  \"title\": \"Resumo curto\",\n  \"summary\": \"Descrição\",\n  \"files\": [\n    {{\n      \"path\": \"index.html\",\n      \"operation\": \"create\",\n      \"afterContent\": \"conteúdo completo\"\n    }}\n  ]\n}}\n\
 ```\n\n\
 Regras:\n\
-- Não apenas descreva ou diga \"eu criaria\". Gere os arquivos reais no bloco.\n\
-- Use caminhos relativos ao projeto (sem \"..\", sem absolutos).\n\
-- operation deve ser \"create\", \"modify\" ou \"delete\".\n\
-- Para \"create\" ou \"modify\", envie o conteúdo final completo em afterContent.\n\
+- Não responda apenas com plano, não diga \"eu criaria\", e não diga que criou se não retornou o patch.\n\
+- Use apenas caminhos relativos ao projeto (NUNCA use path absoluto, NUNCA use \"..\").\n\
+- operation deve ser \"create\", \"modify\" ou \"delete\". Para arquivos novos, use \"create\". Para alterações, use \"modify\".\n\
+- Para \"create\" e \"modify\", envie o conteúdo final completo em afterContent (NUNCA use placeholders or incomplete files).\n\
 - Para \"delete\", use operation: \"delete\" sem afterContent.\n\
-- Não toque em node_modules, .git, vendor, dist, build, target, .next, .cache, .turbo, out.",
+- NUNCA escreva ou altere arquivos em: .git, node_modules, vendor, dist, target, build, .next, .cache, .turbo, out.",
             prompt = ctx.user_prompt,
             name = ctx.project_name,
             ctx = ctx.context_text,

@@ -545,6 +545,7 @@ export function ExecutionDetailPage() {
             feedback={feedback}
             events={detail.events}
             isControlledExecution={isControlledExecution}
+            proposal={proposals[0] || null}
           />
         )}
 
@@ -761,6 +762,7 @@ function ApprovalSection({
   feedback,
   events,
   isControlledExecution,
+  proposal,
 }: {
   approval: Approval | null;
   runPrompt?: string;
@@ -770,6 +772,7 @@ function ApprovalSection({
   feedback: { kind: "success" | "error"; message: string } | null;
   events: WorkflowEvent[];
   isControlledExecution: boolean;
+  proposal?: PatchProposal | null;
 }) {
   const isPending = approval?.status === "pending";
 
@@ -779,7 +782,7 @@ function ApprovalSection({
     [approval, runPrompt]
   );
 
-  if (!approval && !isControlledExecution) {
+  if (!approval && !proposal && !isControlledExecution) {
     return (
       <div className="bg-bg-card border border-border rounded-xl p-5">
         <div className="text-[13px] text-text-muted py-8 text-center">
@@ -878,6 +881,13 @@ function ApprovalSection({
             </div>
           )}
 
+          {/* Mensagem clara solicitada na Fase 6 */}
+          {isPending && canApprove && (
+            <div className="text-[12px] text-warning mb-3 font-semibold">
+              Proposta criada. Aprove para aplicar os arquivos.
+            </div>
+          )}
+
           {/* Ações — só mostra Aprovar/Rejeitar se canApprove */}
           {isPending && canApprove && (
             <div className="flex items-center gap-2">
@@ -919,6 +929,40 @@ function ApprovalSection({
                 <XCircle size={12} className="text-error" />
               )}
               {feedback.message}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Confirmação de arquivos (Fase 9) */}
+      {proposal && (
+        <div className="space-y-3">
+          {proposal.status === "applied" && (
+            <div className="rounded-xl border border-success/30 bg-success-soft/20 p-5">
+              <div className="text-[13px] font-semibold text-success mb-2">
+                Arquivos aplicados no projeto:
+              </div>
+              <ul className="space-y-1 font-mono text-[12px] text-text-primary">
+                {(proposal.filesWritten || proposal.files.map(f => f.path)).map((file) => (
+                  <li key={file}>- {file}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {proposal.status === "failed" && (
+            <div className="rounded-xl border border-error/30 bg-error/10 p-5">
+              <div className="text-[13px] font-semibold text-error mb-2">
+                Falha ao aplicar arquivos:
+              </div>
+              <ul className="space-y-1 font-mono text-[12px] text-error">
+                {(proposal.filesMissing && proposal.filesMissing.length > 0
+                  ? proposal.filesMissing
+                  : proposal.files.map(f => f.path)
+                ).map((file) => (
+                  <li key={file}>- {file.endsWith("após escrita") ? file : `${file} não encontrado após escrita`}</li>
+                ))}
+              </ul>
             </div>
           )}
         </div>
