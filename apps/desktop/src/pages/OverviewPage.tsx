@@ -287,6 +287,9 @@ export function OverviewPage() {
     [providers]
   );
 
+  // PR 014.1 — Blocker síncrono para feedback imediato na UI.
+  // A validação final é feita por missions.getReadiness() em
+  // handleCommandSubmit antes de executar a missão.
   const realExecutionBlocker = useMemo(() => {
     const hasEnabledProvider = providers.some((provider) => provider.enabled);
     const hasGlobalFallback = Boolean(globalDefault.providerId && globalDefault.modelName);
@@ -294,10 +297,10 @@ export function OverviewPage() {
 
     if (executionMode === "real") {
       if (!hasEnabledProvider && !hasGlobalFallback) {
-        return "Modo real indisponível: configure um provider real no Provider Engine.";
+        return "Nenhum provider configurado. Cadastre um provider em Configurações > Providers.";
       }
       if (!isAnyAgentReady) {
-        return "Modo real indisponível: habilite ao menos um agente real com provider/modelo ou use o fallback real do Mission Engine.";
+        return "Nenhum agente pronto para execução. Verifique provider e agentes em Configurações.";
       }
       return undefined;
     }
@@ -305,7 +308,7 @@ export function OverviewPage() {
     if (executionMode !== "multi_agent") return undefined;
 
     if (!hasEnabledProvider && !hasGlobalFallback) {
-      return "Modo multiagente indisponível: ative ao menos um provider real em Configurações.";
+      return "Nenhum provider configurado. Cadastre um provider em Configurações > Providers.";
     }
 
     const labels: Record<string, string> = {
@@ -331,7 +334,7 @@ export function OverviewPage() {
     if (!hasDeveloperReady) missing.push("backend-dev");
 
     if (missing.length === 0) return undefined;
-    return `Modo multiagente indisponível: habilite modelo/provider para ${missing.map((role) => labels[role] || role).join(", ")} (ou use o fallback real do Mission Engine).`;
+    return `Agentes não prontos: ${missing.map((role) => labels[role] || role).join(", ")}. Verifique provider e agentes em Configurações.`;
   }, [executionMode, agents, catalog, globalDefault, providers]);
 
   const projectValid = !projectBlocker && !realExecutionBlocker;
@@ -516,32 +519,10 @@ export function OverviewPage() {
         availableProjects: projects.map((p) => ({ id: p.id, name: p.name })),
       });
 
-      if (executionMode === "real") {
-        const readyAgents = agents.filter((agent) => isAgentConfiguredForRealExecution(agent));
-        const hasEnabledProvider = Boolean(catalog?.providers.length);
-        if (!hasEnabledProvider || readyAgents.length === 0) {
-          window.alert(
-            "Modo real indisponível. Configure ao menos um provider ativo e um agente com modelo selecionado na tela de Agentes."
-          );
-          return;
-        }
-      }
-
-      if (executionMode === "multi_agent") {
-        // PR 014 — Readiness agregada é a única fonte de
-        // verdade para checar se a missão pode rodar.
-        const readiness = await window.fluxora.missions.getReadiness({
-          projectId: project?.id,
-          providerId: context.suggestedAgents.length > 0 ? undefined : undefined,
-        });
-        if (!readiness.ready) {
-          window.alert(
-            readiness.issues[0] ||
-              "Missão ainda não está pronta. Verifique provider e agentes em Configurações > Agentes."
-          );
-          return;
-        }
-      }
+      // PR 014.1 — A validação de readiness já foi feita em
+      // handleCommandSubmit via missions.getReadiness(). Não
+      // há mais guards legados aqui. Se chegou até aqui, a
+      // missão está pronta para executar.
 
       const missionPipeline = resolveMissionPipeline(context.intent);
 
@@ -617,22 +598,47 @@ export function OverviewPage() {
 
     const intent = classifyMissionIntent(text);
 
-    // PR 014 — A readiness real (Agent Engine + Provider
-    // Engine) decide se a missão pode ser executada. Não há
-    // mais pré-checagem legada baseada em `Agent` /
-    // `buildMissionPrecheck` — o backend expõe
-    // `missions.getReadiness(...)` que retorna a mesma visão
-    // da AgentsPage.
+    // PR 014.1 — missions.getReadiness() é a ÚNICA fonte de
+    // verdade para decidir se a missão pode executar. Nenhum
+    // outro guard antigo (buildMissionPrecheck,
+    // getMissingAgentConfigMessage, isAgentConfiguredForRealExecution)
+    // pode bloquear a execução real.
     if (executionMode === "real" || executionMode === "multi_agent") {
       void (async () => {
-        const readiness = await window.fluxora.missions.getReadiness({
-          projectId: activeProject?.id,
-        });
-        if (!readiness.ready) {
-          setDiagnosticContext({ intent });
-          return;
+        try {
+          const readiness = await window.fluxora.missions.getReadiness({
+            projectId: activeProject?.id,
+          });
+
+          console.debug("[Fluxora readiness]", {
+            ready: readiness.ready,
+            defaultProviderId: readiness.defaultProviderId,
+            defaultModel: readiness.defaultModel,
+            agents: readiness.agents.map((a) => ({
+              role: a.role,
+              ready: a.ready,
+              providerId: a.providerId,
+              model: a.model,
+              inheritsProvider: a.inheritsProvider,
+              inheritsModel: a.inheritsModel,
+              issues: a.issues,
+            })),
+            issues: readiness.issues,
+          });
+
+          if (!readiness.ready) {
+            // Mostra diagnóstico detalhado com as issues reais
+            setDiagnosticContext({ intent });
+            return;
+          }
+
+          executeCommand(text);
+        } catch (error) {
+          console.error("[Fluxora readiness] Erro ao verificar prontidão:", error);
+          window.alert(
+            "Erro ao verificar prontidão da missão. Verifique os logs do console."
+          );
         }
-        executeCommand(text);
       })();
       return;
     }

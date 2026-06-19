@@ -23,6 +23,7 @@ import { FirstRunOnboarding, FIRST_RUN_ONBOARDING_KEY } from "../help/FirstRunOn
 import { CommandPalette, type CommandPaletteAction, type CommandPaletteUniversalItem } from "../help/CommandPalette";
 import { useCommandPaletteHistory } from "../../hooks/useCommandPaletteHistory";
 import { loadProviderCatalog } from "../../lib/providerCatalog";
+import { deriveProviderEngineGlobalDefault, isAgentReadyWithFallback } from "@fluxora/shared";
 
 interface AppShellProps {
   children: ReactNode;
@@ -54,6 +55,7 @@ export function AppShell({ children }: AppShellProps) {
   const [agents, setAgents] = useState<{ id: string; name: string; role: string; enabled: boolean; modelProviderId?: string; modelName?: string }[]>([]);
   const [approvals, setApprovals] = useState<{ id: string; title: string; impact: string; projectId?: string; workflowRunId?: string }[]>([]);
   const [catalog, setCatalog] = useState<{ providers: { id: string }[]; models: { id: string }[] } | null>(null);
+  const [providers, setProviders] = useState<{ id: string; enabled: boolean; defaultModel?: string }[]>([]);
 
   useEffect(() => {
     try {
@@ -98,6 +100,7 @@ export function AppShell({ children }: AppShellProps) {
         );
         setApprovals(approvalList);
         setCatalog(catalogResult);
+        setProviders(providers.map((p) => ({ id: p.id, enabled: p.enabled, defaultModel: p.defaultModel })));
       })
       .catch(() => {});
     return () => {
@@ -238,6 +241,12 @@ export function AppShell({ children }: AppShellProps) {
     },
   ], [navigate, location.pathname]);
 
+  // PR 014.1 — Global default para readiness de agentes no command palette
+  const globalDefault = useMemo(
+    () => deriveProviderEngineGlobalDefault(providers),
+    [providers]
+  );
+
   const universalItems = useMemo<CommandPaletteUniversalItem[]>(() => {
     const items: CommandPaletteUniversalItem[] = [];
     projects.forEach((project) => {
@@ -264,9 +273,9 @@ export function AppShell({ children }: AppShellProps) {
       });
     });
     agents.forEach((agent) => {
-      const hasProvider = catalog?.providers.some((p) => p.id === agent.modelProviderId) ?? false;
-      const hasModel = catalog?.models.some((m) => m.id === agent.modelName) ?? false;
-      const ready = agent.enabled && Boolean(agent.modelProviderId && agent.modelName) && (hasProvider && hasModel);
+      // PR 014.1 — Usa isAgentReadyWithFallback que considera
+      // herança de provider/modelo via globalDefault
+      const ready = isAgentReadyWithFallback(agent, globalDefault);
       items.push({
         id: `agent:${agent.id}`,
         title: agent.name,
@@ -319,7 +328,7 @@ export function AppShell({ children }: AppShellProps) {
       });
     });
     return items;
-  }, [projects, executions, agents, approvals, catalog, navigate]);
+  }, [projects, executions, agents, approvals, catalog, globalDefault, navigate]);
 
   /** Ações contextuais baseadas no projeto ativo. */
   const contextActions = useMemo<CommandPaletteAction[]>(() => {

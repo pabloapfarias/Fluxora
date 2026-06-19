@@ -48,7 +48,7 @@ export function GlobalDefaultBanner() {
     >
       <Sparkles size={12} className="text-accent flex-shrink-0" />
       <span>
-        <span className="text-text-primary font-medium">Fallback real do Mission Engine ativo.</span>
+        <span className="text-text-primary font-medium">Provider padrão de execução ativo.</span>
         {" "}Missões e agentes sem sobrescrita usarão <span className="font-mono text-text-primary">{value.modelName}</span>.
       </span>
       <button

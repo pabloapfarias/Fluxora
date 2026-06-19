@@ -312,6 +312,12 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   Provider Engine real, removendo Backend Dev / Frontend Dev /
   Mobile Dev / Orquestrador do pipeline ativo e rebaixando a
   recomendação por stack a papel decorativo.
+- [PR 014.1 — Corrigir bloqueio do modo real e estabilizar readiness](./STATUS_MIGRATION_TAURI_PR_014_1_REAL_MODE_READINESS_FIX.md)
+  Remove guards legados em `executeCommand` que bloqueavam o
+  modo Real usando `isAgentConfiguredForRealExecution` em vez
+  de `missions.getReadiness()`. Garante que provider/modelo
+  herdado é aceito, padroniza mensagens de erro e atualiza
+  command palette para usar `isAgentReadyWithFallback`.
 
 ## Convenções aplicadas em todas as PRs
 
