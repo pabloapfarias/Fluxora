@@ -712,6 +712,7 @@ const DEFAULT_AUDIO_RETENTION: AudioRetentionSettings = {
 const MISSION_STATUS_TO_WORKFLOW: Record<MissionStatus, WorkflowRunStatus> = {
   queued: "approved",
   running: "running",
+  pending_approval: "pending_approval",
   completed: "completed",
   failed: "failed",
   cancelled: "cancelled",
@@ -737,6 +738,7 @@ function toWorkflowRun(mission: MissionRun): WorkflowRun {
       : undefined,
     executionMode: "real",
     realStrategy: "single",
+    finalApprovalId: mission.finalApprovalId,
     createdAt: mission.createdAt,
     updatedAt: mission.updatedAt,
     completedAt: mission.completedAt,

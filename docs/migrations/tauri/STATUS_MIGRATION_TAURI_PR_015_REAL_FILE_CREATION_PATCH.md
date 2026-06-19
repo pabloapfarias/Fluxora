@@ -7,12 +7,13 @@ Corrigir a materialização de arquivos criados/modificados por missões reais a
 Quando o usuário executava uma missão real que exigia a criação de arquivos (como "Crie uma landingpage para uma corretora de seguros" ou "Crie uma página simples para um advogado"), os agentes Planner, Developer, QA e Finalizer apareciam na UI como concluídos com sucesso. No entanto, ao abrir o diretório do projeto ativo, nenhum arquivo havia sido realmente gerado ou modificado. A execução parecia apenas simular a construção sem alterar o disco.
 
 ## 3. Causa Raiz
-Duas causas principais foram identificadas no descompasso de integração:
+Três causas principais foram identificadas no descompasso de integração:
 1. **Developer sem especificações do formato `fluxora_patch`**: O prompt do Developer em `agents.rs` e a montagem das mensagens em `build_agent_messages` instruíam o agente a retornar um bloco `fluxora_patch`, mas não forneciam o esquema JSON esperado. Sem isso, o Developer produzia blocos inválidos, incompletos ou descrevia as alterações de forma textual pura.
 2. **Ausência de validação de criação/alteração no Mission Engine**: Se a missão solicitasse explicitamente a criação de arquivos mas o Developer falhasse em gerar um bloco `fluxora_patch` válido, o Mission Engine ignorava e concluía a missão como sucesso (`completed`), fingindo que os arquivos haviam sido gerados.
+3. **Ausência de vinculação de `finalApprovalId` no backend**: O struct `MissionRecord` no backend Rust não continha o campo `final_approval_id`, fazendo com que a ponte de comunicação (`desktopBridge`) mapeasse `finalApprovalId` como `undefined` para o frontend. Como o frontend necessita deste ID para buscar a aprovação correspondente e exibir o painel de aprovação final (com o botão de Aprovar), a interface ocultava silenciosamente o painel, impossibilitando a aprovação e consequente aplicação das alterações.
 
 ## 4. Por que a Execução Parecia Funcionar mas não Criava Arquivos
-A execução visual na UI de execução e timeline (Planner → Developer → QA → Finalizer) completava com sucesso porque o pipeline de execução lógica em `run_mission_agents` rodava e o Finalizer resumia o resultado textual. O status da missão passava para `completed` mesmo sem patches estruturados anexados. Além disso, a aba "Arquivos" e "Aprovação" ficavam vazias (ou com dados mockados em ambiente browser), e não havia arquivos reais sendo materializados por falta de propostas criadas no backend.
+A execução visual na UI de execução e timeline (Planner → Developer → QA → Finalizer) completava com sucesso porque o pipeline de execução lógica em `run_mission_agents` rodava e o Finalizer resumia o resultado textual. O status da missão passava para `completed` mesmo sem patches estruturados anexados. Além disso, a aba "Arquivos" e "Aprovação" ficavam vazias (ou com dados mockados em ambiente browser). No runtime real, o painel de aprovação final ficava oculto por falta da vinculação correta do `finalApprovalId` entre a missão (`MissionRecord`) e a aprovação correspondente (`ExecutionApproval`).
 
 ## 5. Como o Developer Agora Gera `fluxora_patch`
 - **System Prompt do Developer atualizado**: Em `agents.rs`, `DEVELOPER_PROMPT` foi estendido com instruções completas sobre o formato JSON do bloco `fluxora_patch`.
@@ -37,6 +38,7 @@ Se a política de segurança do projeto para as ações propostas (`create-files
 1. Uma `ExecutionApproval` correspondente é gerada no Approvals Engine com ação `apply-patch` e o `proposalId` em seu payload.
 2. A proposta de patch transiciona para o status `pending_approval` e vincula o `approvalId`.
 3. O evento `patch/approval-required` é emitido.
+4. O `final_approval_id` é registrado no registro de missão (`MissionRecord`) do backend para que o frontend consiga mapear corretamente e renderizar o painel de aprovação final na timeline.
 
 ## 9. Como a Aplicação do Patch Escreve no Filesystem
 Ao aprovar a aprovação vinculada à proposta:
@@ -56,7 +58,7 @@ Se qualquer ação da proposta estiver com a decisão `deny` nas políticas do p
 
 ## 11. Como a UI Mostra Arquivos/Diff/Aprovação
 - **Arquivos/Diff**: `desktopBridge.ts` sobrescreve `git.changedFiles(runId)` e `git.fileDiff(runId, filePath)` para rotear as chamadas para `patches_get_changed_files` e `patches_get_file_diff`. Isso retorna os arquivos propostos com status, contagem de adições/remoções e diffs gerados dinamicamente pelo Patch Engine.
-- **Aprovação**: O `ExecutionDetailPage` exibe a aba de aprovação se houver uma aprovação vinculada à execução. Clicar em "Aprovar" invoca `workflows.approveFinal` que por sua vez chama `approvals.approve` do backend. O backend detecta a ação `apply-patch` e automaticamente executa a aplicação do patch (materializando os arquivos reais no diretório do projeto).
+- **Aprovação**: O `ExecutionDetailPage` e o `OverviewPage` exibem a aba/barra de aprovação se houver uma aprovação vinculada à execução. O mapeamento é feito preenchendo o `finalApprovalId` no conversor `toWorkflowRun` do `desktopBridge.ts` com o valor vindo do backend. Clicar em "Aprovar" invoca `workflows.approveFinal` que por sua vez chama `approvals.approve` do backend. O backend detecta a ação `apply-patch` e automaticamente executa a aplicação do patch (materializando os arquivos reais no diretório do projeto).
 
 ## 12. Como Validar no Diretório Real
 1. Execute uma missão assistida de criação de arquivo no Fluxora.

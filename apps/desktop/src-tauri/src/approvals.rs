@@ -158,7 +158,7 @@ fn generate_approval_id() -> String {
     format!("appr-{millis}-{seq}")
 }
 
-fn approvals_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn approvals_file_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
         .app_data_dir()
@@ -166,7 +166,7 @@ fn approvals_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base_dir.join("fluxora").join("approvals.json"))
 }
 
-fn ensure_approvals_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn ensure_approvals_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let file_path = approvals_file_path(app)?;
     let parent = file_path
         .parent()
@@ -176,7 +176,7 @@ fn ensure_approvals_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(file_path)
 }
 
-fn read_approvals_file(app: &AppHandle) -> Result<ApprovalsFile, String> {
+fn read_approvals_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<ApprovalsFile, String> {
     let file_path = ensure_approvals_dir(app)?;
     if !file_path.exists() {
         return Ok(ApprovalsFile::default());
@@ -194,7 +194,7 @@ fn read_approvals_file(app: &AppHandle) -> Result<ApprovalsFile, String> {
     })
 }
 
-fn write_approvals_file(app: &AppHandle, store: &ApprovalsFile) -> Result<(), String> {
+fn write_approvals_file<R: tauri::Runtime>(app: &AppHandle<R>, store: &ApprovalsFile) -> Result<(), String> {
     let file_path = ensure_approvals_dir(app)?;
     let content = serde_json::to_string_pretty(store)
         .map_err(|error| format!("Não foi possível serializar as aprovações: {error}"))?;
@@ -235,7 +235,7 @@ fn validate_inputs(payload: &CreateApprovalPayload) -> Result<(), String> {
 
 /// Carrega o arquivo de aprovações no startup do Tauri. Falhas
 /// de I/O são logadas e descartadas.
-pub fn load_approvals_on_startup(app: &AppHandle) {
+pub fn load_approvals_on_startup<R: tauri::Runtime>(app: &AppHandle<R>) {
     match read_approvals_file(app) {
         Ok(store) => {
             let count = store.approvals.len();
@@ -254,7 +254,7 @@ pub fn load_approvals_on_startup(app: &AppHandle) {
     }
 }
 
-fn persist(app: &AppHandle) -> Result<(), String> {
+fn persist<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let state = app.state::<ApprovalsState>();
     let approvals = state
         .approvals
@@ -299,8 +299,8 @@ where
 // Emissão de eventos `approval/*`
 // ---------------------------------------------------------------------------
 
-fn emit_approval_event(
-    app: &AppHandle,
+fn emit_approval_event<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     event_type: &str,
     level: &str,
     approval: &ExecutionApprovalRecord,
@@ -348,8 +348,8 @@ pub fn approvals_ping() -> String {
 
 /// Cria uma nova `ExecutionApproval` pendente e emite o evento
 /// `approval/created`.
-pub fn approvals_create(
-    app: AppHandle,
+pub fn approvals_create<R: tauri::Runtime>(
+    app: AppHandle<R>,
     payload: CreateApprovalPayload,
 ) -> Result<ExecutionApprovalRecord, String> {
     validate_inputs(&payload)?;
@@ -390,7 +390,7 @@ pub fn approvals_create(
 }
 
 /// Lista todas as aprovações (mais recentes primeiro).
-pub fn approvals_list(app: AppHandle) -> Result<Vec<ExecutionApprovalRecord>, String> {
+pub fn approvals_list<R: tauri::Runtime>(app: AppHandle<R>) -> Result<Vec<ExecutionApprovalRecord>, String> {
     let state = app.state::<ApprovalsState>();
     let guard = state
         .approvals
@@ -402,8 +402,8 @@ pub fn approvals_list(app: AppHandle) -> Result<Vec<ExecutionApprovalRecord>, St
 }
 
 /// Retorna uma aprovação por id.
-pub fn approvals_get(
-    app: AppHandle,
+pub fn approvals_get<R: tauri::Runtime>(
+    app: AppHandle<R>,
     id: String,
 ) -> Result<Option<ExecutionApprovalRecord>, String> {
     let state = app.state::<ApprovalsState>();
@@ -412,8 +412,8 @@ pub fn approvals_get(
 
 /// Lista aprovações pendentes que ainda podem ser resolvidas
 /// (exclui `cancelled` e `expired`).
-pub fn approvals_list_actionable(
-    app: AppHandle,
+pub fn approvals_list_actionable<R: tauri::Runtime>(
+    app: AppHandle<R>,
 ) -> Result<Vec<ExecutionApprovalRecord>, String> {
     let state = app.state::<ApprovalsState>();
     let guard = state
@@ -637,7 +637,7 @@ pub fn approvals_cancel(
 /// Limpa todas as aprovações (apenas dev/debug). Não exposto
 /// no `FluxoraAPI` (sem comando Tauri).
 #[allow(dead_code)]
-pub fn clear_all_for_tests(app: &AppHandle) -> Result<(), String> {
+pub fn clear_all_for_tests<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let state = app.state::<ApprovalsState>();
     {
         let mut guard = state

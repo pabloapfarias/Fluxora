@@ -331,11 +331,16 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   no Fluxora. O prompt do Developer e a montagem de mensagens foram estendidos com o
   esquema JSON do bloco `fluxora_patch`. O Mission Engine falha caso missões de criação
   não gerem patches, e a UI do desktopBridge foi ajustada para filtrar aprovações por missionId.
-  Adiciona testes unitários para o parser de patches e gravação segura local no filesystem.
+  Adiciona suporte para vincular a aprovação final ao registro da missão (`finalApprovalId` / `final_approval_id`),
+  permitindo a renderização correta do painel de aprovação final no frontend. Adiciona testes unitários
+  para o parser de patches e gravação segura local no filesystem.
 - [PR 016 — Git branch e commit local controlado após patch aplicado](./STATUS_MIGRATION_TAURI_PR_016_CONTROLLED_GIT_COMMIT.md)
   Adiciona suporte a Git local controlado após aplicação de patch, permitindo que o
   usuário crie branch e commit locais contendo unicamente as modificações aplicadas
   pela PatchProposal da missão, integrando aprovações/permissões e logs de commits no app.
+- [HOTFIX — Garantir escrita real em disco a partir de patches aprovados](./STATUS_HOTFIX_REAL_DISK_WRITE.md)
+  Ajusta o estado da missão para não sinalizar sucesso antes da confirmação física no disco,
+  endurece a segunda tentativa do `fluxora_patch` e adiciona logs seguros de escrita real.
 
 ## Convenções aplicadas em todas as PRs
 

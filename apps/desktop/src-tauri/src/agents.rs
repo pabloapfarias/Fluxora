@@ -81,6 +81,8 @@ const MAX_ERROR_MESSAGE_CHARS: usize = 500;
 /// nesta PR). Os 4 agentes padrão cabem; agentes custom
 /// adicionais são ignorados na execução (mas podem ser listados).
 pub(crate) const MAX_AGENTS_PER_MISSION: usize = 4;
+const DEFAULT_AGENT_MAX_TOKENS: u32 = 2048;
+const CREATION_AGENT_MAX_TOKENS: u32 = 8192;
 
 /// System prompt interno padrão do Planner (PR 011). Não-editável
 /// pelo usuário nesta PR. Salvo no `AgentConfig.systemPrompt` na
@@ -516,6 +518,14 @@ fn truncate_output(text: &str) -> String {
     out.push_str(&text[..end]);
     out.push('…');
     out
+}
+
+fn developer_max_tokens(user_prompt: &str) -> u32 {
+    if missions::has_creation_request(user_prompt) {
+        CREATION_AGENT_MAX_TOKENS
+    } else {
+        DEFAULT_AGENT_MAX_TOKENS
+    }
 }
 
 fn truncate_input_summary(text: &str) -> String {
@@ -1215,6 +1225,12 @@ pub fn run_mission_agents(
         });
         let _ = persist_agent_steps(app);
 
+        let max_tokens = if agent.role == "developer" {
+            developer_max_tokens(ctx.user_prompt)
+        } else {
+            DEFAULT_AGENT_MAX_TOKENS
+        };
+
         // Resolve provider/model para o agente.
         let provider_id = agent.provider_id.as_deref().unwrap_or(ctx.default_provider_id);
         let model = agent.model.as_deref().unwrap_or(ctx.default_model);
@@ -1235,7 +1251,7 @@ pub fn run_mission_agents(
             provider_id,
             model,
             &messages,
-            Some(2048),
+            Some(max_tokens),
         );
 
         match result {
@@ -1322,7 +1338,12 @@ pub fn run_mission_agents(
                                 role: "user".to_string(),
                                 content: "A resposta anterior não contém um bloco fluxora_patch válido.\n\
 Converta sua solução em um bloco fluxora_patch válido agora.\n\
-Retorne somente o bloco fluxora_patch.".to_string(),
+Retorne somente o bloco fluxora_patch.\n\
+A missão pediu criação real de arquivos.\n\
+Os arquivos obrigatórios são: index.html, styles.css e script.js quando a missão pedir landing page simples.\n\
+Se a resposta anterior ficou truncada, reduza o tamanho e gere uma versão compacta, porém completa.\n\
+Projeto vazio: prefira uma landing page enxuta com HTML, CSS e JS curtos, sem bibliotecas externas e sem texto excessivo.\n\
+Use operation create e afterContent completo.".to_string(),
                             });
 
                             let retry_result = execute_provider_chat_for_agent(
@@ -1336,7 +1357,7 @@ Retorne somente o bloco fluxora_patch.".to_string(),
                                 provider_id,
                                 model,
                                 &retry_messages,
-                                Some(2048),
+                                Some(CREATION_AGENT_MAX_TOKENS),
                             );
 
                             match retry_result {
@@ -1580,7 +1601,8 @@ Regras:\n\
 - operation deve ser \"create\", \"modify\" ou \"delete\". Para arquivos novos, use \"create\". Para alterações, use \"modify\".\n\
 - Para \"create\" e \"modify\", envie o conteúdo final completo em afterContent (NUNCA use placeholders or incomplete files).\n\
 - Para \"delete\", use operation: \"delete\" sem afterContent.\n\
-- NUNCA escreva ou altere arquivos em: .git, node_modules, vendor, dist, target, build, .next, .cache, .turbo, out.",
+- NUNCA escreva ou altere arquivos em: .git, node_modules, vendor, dist, target, build, .next, .cache, .turbo, out.\n\
+- Se o projeto estiver vazio e a missão for uma landing page simples, gere uma implementação ENXUTA que caiba inteira na resposta: crie obrigatoriamente index.html, styles.css e script.js, com conteúdo compacto e completo, sem bibliotecas externas e sem texto excessivo.",
             prompt = ctx.user_prompt,
             name = ctx.project_name,
             ctx = ctx.context_text,

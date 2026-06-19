@@ -2038,6 +2038,7 @@ export type ProviderEventPayload =
 export type MissionStatus =
   | "queued"
   | "running"
+  | "pending_approval"
   | "completed"
   | "failed"
   | "cancelled";
@@ -2072,6 +2073,7 @@ export interface MissionRun {
   currentPhase?: MissionPhase;
   resultText?: string;
   error?: string;
+  finalApprovalId?: string;
   createdAt: string;
   updatedAt: string;
   startedAt?: string;

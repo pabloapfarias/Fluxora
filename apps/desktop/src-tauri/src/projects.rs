@@ -92,12 +92,12 @@ impl Default for ProjectsFile {
     }
 }
 
-pub fn list(app: &AppHandle) -> Result<Vec<ProjectResponse>, String> {
+pub fn list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<ProjectResponse>, String> {
     let store = read_projects_file(app)?;
     Ok(store.projects.into_iter().map(map_project_response).collect())
 }
 
-pub fn get(app: &AppHandle, id: String) -> Result<Option<ProjectResponse>, String> {
+pub fn get<R: tauri::Runtime>(app: &AppHandle<R>, id: String) -> Result<Option<ProjectResponse>, String> {
     let store = read_projects_file(app)?;
     Ok(store
         .projects
@@ -106,7 +106,7 @@ pub fn get(app: &AppHandle, id: String) -> Result<Option<ProjectResponse>, Strin
         .map(map_project_response))
 }
 
-pub fn create(app: &AppHandle, payload: CreateProjectPayload) -> Result<ProjectResponse, String> {
+pub fn create<R: tauri::Runtime>(app: &AppHandle<R>, payload: CreateProjectPayload) -> Result<ProjectResponse, String> {
     let name = payload.name.trim().to_string();
     if name.is_empty() {
         return Err("O nome do projeto não pode estar vazio.".to_string());
@@ -151,8 +151,8 @@ pub fn create(app: &AppHandle, payload: CreateProjectPayload) -> Result<ProjectR
     Ok(map_project_response(project))
 }
 
-pub fn update(
-    app: &AppHandle,
+pub fn update<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     id: String,
     payload: UpdateProjectPayload,
 ) -> Result<ProjectResponse, String> {
@@ -224,7 +224,7 @@ pub fn update(
     Ok(map_project_response(project))
 }
 
-pub fn remove(app: &AppHandle, id: String) -> Result<(), String> {
+pub fn remove<R: tauri::Runtime>(app: &AppHandle<R>, id: String) -> Result<(), String> {
     let mut store = read_projects_file(app)?;
     let before = store.projects.len();
     store.projects.retain(|project| project.id != id);
@@ -244,7 +244,7 @@ pub fn validate_path(project_path: String) -> ValidatePathResult {
 /// Retorna `Err` se o projeto não existir. Usado pelos módulos
 /// `git` e `filesystem` para garantir que operações sensíveis
 /// operem apenas dentro de projetos cadastrados.
-pub fn find_project_path(app: &AppHandle, project_id: &str) -> Result<PathBuf, String> {
+pub fn find_project_path<R: tauri::Runtime>(app: &AppHandle<R>, project_id: &str) -> Result<PathBuf, String> {
     let store = read_projects_file(app)?;
     let project = store
         .projects
@@ -268,7 +268,7 @@ fn map_project_response(project: ProjectRecord) -> ProjectResponse {
     }
 }
 
-fn projects_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn projects_file_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
         .app_data_dir()
@@ -276,7 +276,7 @@ fn projects_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base_dir.join("fluxora").join("projects.json"))
 }
 
-fn ensure_projects_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn ensure_projects_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let file_path = projects_file_path(app)?;
     let parent = file_path
         .parent()
@@ -286,7 +286,7 @@ fn ensure_projects_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(file_path)
 }
 
-fn read_projects_file(app: &AppHandle) -> Result<ProjectsFile, String> {
+fn read_projects_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<ProjectsFile, String> {
     let file_path = ensure_projects_dir(app)?;
     if !file_path.exists() {
         return Ok(ProjectsFile::default());
@@ -307,7 +307,7 @@ fn read_projects_file(app: &AppHandle) -> Result<ProjectsFile, String> {
     })
 }
 
-fn write_projects_file(app: &AppHandle, store: &ProjectsFile) -> Result<(), String> {
+fn write_projects_file<R: tauri::Runtime>(app: &AppHandle<R>, store: &ProjectsFile) -> Result<(), String> {
     let file_path = ensure_projects_dir(app)?;
     let content = serde_json::to_string_pretty(store)
         .map_err(|error| format!("Não foi possível serializar os projetos: {error}"))?;

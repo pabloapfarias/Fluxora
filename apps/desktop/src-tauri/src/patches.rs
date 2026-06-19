@@ -238,7 +238,7 @@ impl Default for PatchesFile {
     }
 }
 
-fn patches_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn patches_file_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
         .app_data_dir()
@@ -246,7 +246,7 @@ fn patches_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base_dir.join("fluxora").join("patches.json"))
 }
 
-fn ensure_patches_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn ensure_patches_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let file_path = patches_file_path(app)?;
     let parent = file_path.parent().ok_or_else(|| {
         "Não foi possível resolver o diretório de persistência de patches.".to_string()
@@ -256,7 +256,7 @@ fn ensure_patches_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(file_path)
 }
 
-fn read_patches_file(app: &AppHandle) -> Result<PatchesFile, String> {
+fn read_patches_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PatchesFile, String> {
     let file_path = ensure_patches_dir(app)?;
     if !file_path.exists() {
         return Ok(PatchesFile::default());
@@ -274,7 +274,7 @@ fn read_patches_file(app: &AppHandle) -> Result<PatchesFile, String> {
     })
 }
 
-fn write_patches_file(app: &AppHandle, store: &PatchesFile) -> Result<(), String> {
+fn write_patches_file<R: tauri::Runtime>(app: &AppHandle<R>, store: &PatchesFile) -> Result<(), String> {
     let file_path = ensure_patches_dir(app)?;
     let content = serde_json::to_string_pretty(store)
         .map_err(|error| format!("Não foi possível serializar as propostas de patch: {error}"))?;
@@ -285,7 +285,7 @@ fn write_patches_file(app: &AppHandle, store: &PatchesFile) -> Result<(), String
 /// Carrega o arquivo de patches no startup do Tauri. Falhas de
 /// I/O são logadas e descartadas — o app continua com estado
 /// vazio até a primeira criação de proposta.
-pub fn load_patches_on_startup(app: &AppHandle) {
+pub fn load_patches_on_startup<R: tauri::Runtime>(app: &AppHandle<R>) {
     match read_patches_file(app) {
         Ok(store) => {
             let count = store.proposals.len();
@@ -304,7 +304,7 @@ pub fn load_patches_on_startup(app: &AppHandle) {
     }
 }
 
-fn persist(app: &AppHandle) -> Result<(), String> {
+fn persist<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let state = app.state::<PatchesState>();
     let proposals = state
         .proposals
@@ -575,8 +575,8 @@ where
 // Emissão de eventos `patch/*`
 // ---------------------------------------------------------------------------
 
-fn emit_patch_event(
-    app: &AppHandle,
+fn emit_patch_event<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     event_type: &str,
     level: &str,
     project_id: &str,
@@ -610,6 +610,30 @@ fn emit_patch_event(
         Some(payload),
     );
     events::emit_to_app(app, event);
+}
+
+fn sync_mission_status_from_patch<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    mission_id: &str,
+    status: &str,
+    error: Option<&str>,
+) {
+    let state = app.state::<missions::MissionsState>();
+    let _ = missions::update_mission(&state, mission_id, |mission| {
+        mission.status = status.to_string();
+        mission.current_phase = Some(match status {
+            "pending_approval" => "pending-approval".to_string(),
+            "failed" => "failed".to_string(),
+            _ => "final-report".to_string(),
+        });
+        mission.error = error.map(|value| value.to_string());
+        mission.completed_at = if status == "completed" {
+            Some(now_iso())
+        } else {
+            None
+        };
+    });
+    let _ = missions::persist(app);
 }
 
 // ---------------------------------------------------------------------------
@@ -711,7 +735,7 @@ pub fn patches_ping() -> String {
 }
 
 /// Lista todas as propostas de patch persistidas (mais recentes primeiro).
-pub fn patches_list(app: AppHandle) -> Result<Vec<PatchProposalRecord>, String> {
+pub fn patches_list<R: tauri::Runtime>(app: AppHandle<R>) -> Result<Vec<PatchProposalRecord>, String> {
     let state = app.state::<PatchesState>();
     let guard = state
         .proposals
@@ -723,14 +747,14 @@ pub fn patches_list(app: AppHandle) -> Result<Vec<PatchProposalRecord>, String> 
 }
 
 /// Retorna uma proposta por `id` (ou `None` se não existir).
-pub fn patches_get(app: AppHandle, id: String) -> Result<Option<PatchProposalRecord>, String> {
+pub fn patches_get<R: tauri::Runtime>(app: AppHandle<R>, id: String) -> Result<Option<PatchProposalRecord>, String> {
     let state = app.state::<PatchesState>();
     Ok(find_proposal(&state, &id))
 }
 
 /// Lista todas as propostas de patch de uma missão (mais recentes primeiro).
-pub fn patches_list_by_mission(
-    app: AppHandle,
+pub fn patches_list_by_mission<R: tauri::Runtime>(
+    app: AppHandle<R>,
     mission_id: String,
 ) -> Result<Vec<PatchProposalRecord>, String> {
     let state = app.state::<PatchesState>();
@@ -739,8 +763,8 @@ pub fn patches_list_by_mission(
 
 /// Cria uma nova proposta de patch. Valida paths, operações e
 /// limites. Retorna a proposta persistida.
-pub fn patches_create(
-    app: AppHandle,
+pub fn patches_create<R: tauri::Runtime>(
+    app: AppHandle<R>,
     title: String,
     summary: Option<String>,
     mission_id: String,
@@ -877,8 +901,8 @@ pub fn patches_reject(
 /// Retorna a proposta atualizada com `status: "applied"` em
 /// caso de sucesso, ou `status: "failed"` com `error` em caso
 /// de falha.
-pub fn patches_apply(
-    app: AppHandle,
+pub fn patches_apply<R: tauri::Runtime>(
+    app: AppHandle<R>,
     proposal_id: String,
     approval_id: Option<String>,
 ) -> Result<PatchProposalRecord, String> {
@@ -973,6 +997,7 @@ pub fn patches_apply(
 
     // 2. Resolver root do projeto.
     let project_root = projects::find_project_path(&app, &current.project_id)?;
+    let project_path_str = project_root.to_string_lossy().to_string();
 
     // 3. Emitir evento de início.
     emit_patch_event(
@@ -986,6 +1011,7 @@ pub fn patches_apply(
         Some(serde_json::json!({
             "proposalId": &current.id,
             "filesCount": current.files.len(),
+            "projectPath": &project_path_str,
         })),
     );
 
@@ -1001,9 +1027,31 @@ pub fn patches_apply(
     let mut applied_files: u32 = 0;
     let mut last_error: Option<String> = None;
     for file in &current.files {
+        let resolved_path = is_safe_path(&file.path)
+            .ok()
+            .and_then(|normalized| resolve_under_project(&project_root, &normalized).ok())
+            .map(|path| path.to_string_lossy().to_string());
         match apply_one_file(&project_root, file) {
             Ok(()) => {
                 applied_files += 1;
+                let exists_after_write = resolved_path
+                    .as_ref()
+                    .map(|path| PathBuf::from(path).exists())
+                    .unwrap_or(false);
+                eprintln!(
+                    "[Fluxora Disk Write] projectId={} projectPath={} missionId={} patchProposalId={} approvalId={} file={} resolvedPath={} writeAttempted=true existsAfterWrite={}",
+                    current.project_id,
+                    project_path_str,
+                    current.mission_id,
+                    current.id,
+                    approval_id
+                        .clone()
+                        .or_else(|| current.approval_id.clone())
+                        .unwrap_or_default(),
+                    file.path,
+                    resolved_path.clone().unwrap_or_default(),
+                    exists_after_write
+                );
                 emit_patch_event(
                     &app,
                     "patch/file-applied",
@@ -1020,6 +1068,24 @@ pub fn patches_apply(
                 );
             }
             Err(error) => {
+                let exists_after_write = resolved_path
+                    .as_ref()
+                    .map(|path| PathBuf::from(path).exists())
+                    .unwrap_or(false);
+                eprintln!(
+                    "[Fluxora Disk Write] projectId={} projectPath={} missionId={} patchProposalId={} approvalId={} file={} resolvedPath={} writeAttempted=true existsAfterWrite={}",
+                    current.project_id,
+                    project_path_str,
+                    current.mission_id,
+                    current.id,
+                    approval_id
+                        .clone()
+                        .or_else(|| current.approval_id.clone())
+                        .unwrap_or_default(),
+                    file.path,
+                    resolved_path.clone().unwrap_or_default(),
+                    exists_after_write
+                );
                 last_error = Some(error.clone());
                 emit_patch_event(
                     &app,
@@ -1050,6 +1116,7 @@ pub fn patches_apply(
         })
         .ok_or_else(|| format!("Proposta {proposal_id} não encontrada."))?;
         persist(&app)?;
+        sync_mission_status_from_patch(&app, &updated.mission_id, "failed", Some(&truncated));
         emit_patch_event(
             &app,
             "patch/apply-failed",
@@ -1067,7 +1134,6 @@ pub fn patches_apply(
         return Err(error);
     }
 
-    let project_path_str = project_root.to_string_lossy().to_string();
     let mut files_written = Vec::new();
     let mut files_missing = Vec::new();
     for file in &current.files {
@@ -1106,6 +1172,7 @@ pub fn patches_apply(
         })
         .ok_or_else(|| format!("Proposta {proposal_id} não encontrada."))?;
         persist(&app)?;
+        sync_mission_status_from_patch(&app, &updated.mission_id, "failed", Some(&truncated));
         emit_patch_event(
             &app,
             "patch/apply-failed",
@@ -1137,6 +1204,7 @@ pub fn patches_apply(
     })
     .ok_or_else(|| format!("Proposta {proposal_id} não encontrada."))?;
     persist(&app)?;
+    sync_mission_status_from_patch(&app, &updated.mission_id, "completed", None);
     emit_patch_event(
         &app,
         "patch/apply-completed",
@@ -1266,8 +1334,8 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// representa o `missionId` (a UI atual recebe
 /// `changedFiles(workflowRunId)` e o desktopBridge faz a
 /// ponte).
-pub fn patches_get_changed_files(
-    app: AppHandle,
+pub fn patches_get_changed_files<R: tauri::Runtime>(
+    app: AppHandle<R>,
     workflow_run_id: String,
 ) -> Result<Vec<serde_json::Value>, String> {
     let state = app.state::<PatchesState>();
@@ -1328,8 +1396,8 @@ pub fn patches_get_changed_files(
 /// criação da proposta) ou — se a proposta já foi aplicada —
 /// tenta complementar com `git diff` (best-effort, sem falhar
 /// se git não estiver disponível).
-pub fn patches_get_file_diff(
-    app: AppHandle,
+pub fn patches_get_file_diff<R: tauri::Runtime>(
+    app: AppHandle<R>,
     workflow_run_id: String,
     file_path: String,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -1428,8 +1496,8 @@ pub fn patches_get_file_diff(
 /// Retorna `(PatchProposal, MissionLogLine)` para que o
 /// Mission Engine possa registrar o resultado.
 #[allow(dead_code)]
-pub fn create_proposal_from_provider_text(
-    app: &AppHandle,
+pub fn create_proposal_from_provider_text<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     mission: &missions::MissionRecord,
     title: String,
     summary: Option<String>,
@@ -1587,6 +1655,24 @@ pub fn create_proposal_from_provider_text(
             p.approval_id = Some(approval.id.clone());
         });
         let _ = persist(app);
+
+        // Link the approval to the mission run record
+        let mission_state = app.state::<missions::MissionsState>();
+        let _ = missions::update_mission(&mission_state, &mission.id, |m| {
+            m.final_approval_id = Some(approval.id.clone());
+            m.status = "pending_approval".to_string();
+            m.current_phase = Some("pending-approval".to_string());
+            m.completed_at = None;
+        });
+        let _ = missions::persist(app);
+        eprintln!(
+            "[Fluxora Disk Write] projectId={} projectPath={} missionId={} patchProposalId={} approvalId={} file= resolvedPath= writeAttempted=false existsAfterWrite=false",
+            stored.project_id,
+            project_root.to_string_lossy(),
+            stored.mission_id,
+            stored.id,
+            approval.id
+        );
         emit_patch_event(
             app,
             "patch/approval-required",
@@ -1645,6 +1731,34 @@ pub fn create_proposal_from_provider_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{approvals, events, missions, permissions, projects};
+    use tauri::test::mock_builder;
+
+    fn build_test_app() -> tauri::App<tauri::test::MockRuntime> {
+        let root = std::env::temp_dir().join(format!(
+            "fluxora-hotfix-test-{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let data_home = root.join("xdg-data");
+        let config_home = root.join("xdg-config");
+        std::fs::create_dir_all(&data_home).unwrap();
+        std::fs::create_dir_all(&config_home).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &data_home);
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+
+        mock_builder()
+            .manage(events::AppEventsState::new())
+            .manage(missions::MissionsState::new())
+            .manage(missions::MissionJobsState::new())
+            .manage(permissions::PermissionsState::new())
+            .manage(approvals::ApprovalsState::new())
+            .manage(PatchesState::new())
+            .build(tauri::generate_context!())
+            .unwrap()
+    }
 
     #[test]
     fn safe_path_rejects_empty() {
@@ -2008,5 +2122,138 @@ mod tests {
         assert!(result.is_err());
 
         let _ = std::fs::remove_dir_all(&project_dir);
+    }
+
+    #[test]
+    fn approval_flow_writes_real_files_and_updates_mission_status() {
+        let app = build_test_app();
+        let project_dir = std::path::PathBuf::from("/tmp/fluxora-disk-real-test");
+        if project_dir.exists() {
+            let _ = std::fs::remove_dir_all(&project_dir);
+        }
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let _ = std::process::Command::new("git")
+            .arg("init")
+            .arg(&project_dir)
+            .output()
+            .unwrap();
+
+        let project = projects::create(
+            app.handle(),
+            projects::CreateProjectPayload {
+                name: "Disk Test".to_string(),
+                path: project_dir.to_string_lossy().to_string(),
+                stack: vec!["html".to_string()],
+            },
+        )
+        .unwrap();
+        let mission = missions::missions_create(
+            app.handle().clone(),
+            missions::CreateMissionPayload {
+                project_id: project.id.clone(),
+                prompt: "Crie uma landing page simples para uma corretora de seguros usando HTML, CSS e JavaScript. Crie obrigatoriamente os arquivos index.html, styles.css e script.js.".to_string(),
+                title: Some("Smoke disk write".to_string()),
+                provider_id: None,
+                model: None,
+                mode: Some("assistido".to_string()),
+            },
+        )
+        .unwrap();
+        let files = vec![
+            PatchFileChangeRecord {
+                path: "index.html".to_string(),
+                operation: "create".to_string(),
+                before_content: None,
+                after_content: Some("<!doctype html>\n<title>Seguros</title>\n".to_string()),
+                unified_diff: None,
+                additions: None,
+                deletions: None,
+                is_new_file: None,
+                is_deleted_file: None,
+            },
+            PatchFileChangeRecord {
+                path: "styles.css".to_string(),
+                operation: "create".to_string(),
+                before_content: None,
+                after_content: Some("body { font-family: sans-serif; }\n".to_string()),
+                unified_diff: None,
+                additions: None,
+                deletions: None,
+                is_new_file: None,
+                is_deleted_file: None,
+            },
+            PatchFileChangeRecord {
+                path: "script.js".to_string(),
+                operation: "create".to_string(),
+                before_content: None,
+                after_content: Some("console.log('seguros');\n".to_string()),
+                unified_diff: None,
+                additions: None,
+                deletions: None,
+                is_new_file: None,
+                is_deleted_file: None,
+            },
+        ];
+
+        let (proposal, _) = create_proposal_from_provider_text(
+            app.handle(),
+            &mission,
+            "Criar landing page".to_string(),
+            Some("Cria os arquivos obrigatórios.".to_string()),
+            files,
+        )
+        .unwrap();
+        assert_eq!(proposal.status, "pending_approval");
+        let approval_id = proposal.approval_id.clone().unwrap();
+
+        let mission_after_proposal = missions::missions_get(app.handle().clone(), mission.id.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(mission_after_proposal.status, "pending_approval");
+        assert_eq!(mission_after_proposal.final_approval_id, Some(approval_id.clone()));
+
+        {
+            let approvals_state = app.state::<approvals::ApprovalsState>();
+            let mut approvals_guard = approvals_state.approvals.lock().unwrap();
+            let approval = approvals_guard
+                .iter_mut()
+                .find(|entry| entry.id == approval_id)
+                .unwrap();
+            approval.status = "approved".to_string();
+            approval.resolved_at = Some(now_iso());
+        }
+
+        let applied = patches_apply(app.handle().clone(), proposal.id.clone(), proposal.approval_id)
+            .unwrap();
+        assert_eq!(applied.status, "applied");
+        assert_eq!(
+            applied.files_written,
+            Some(vec![
+                "index.html".to_string(),
+                "styles.css".to_string(),
+                "script.js".to_string()
+            ])
+        );
+        assert_eq!(applied.files_missing, Some(Vec::new()));
+        assert!(project_dir.join("index.html").exists());
+        assert!(project_dir.join("styles.css").exists());
+        assert!(project_dir.join("script.js").exists());
+
+        let git_status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&project_dir)
+            .arg("status")
+            .arg("--short")
+            .output()
+            .unwrap();
+        let git_status_text = String::from_utf8(git_status.stdout).unwrap();
+        assert!(git_status_text.contains("?? index.html"));
+        assert!(git_status_text.contains("?? styles.css"));
+        assert!(git_status_text.contains("?? script.js"));
+
+        let mission_after_apply = missions::missions_get(app.handle().clone(), mission.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(mission_after_apply.status, "completed");
     }
 }

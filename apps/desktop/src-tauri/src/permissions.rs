@@ -233,7 +233,7 @@ fn generate_policy_event_id() -> String {
     format!("permission-evt-{millis}-{seq}")
 }
 
-fn permissions_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn permissions_file_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
         .app_data_dir()
@@ -241,7 +241,7 @@ fn permissions_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base_dir.join("fluxora").join("permissions.json"))
 }
 
-fn ensure_permissions_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn ensure_permissions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let file_path = permissions_file_path(app)?;
     let parent = file_path.parent().ok_or_else(|| {
         "Não foi possível resolver o diretório de persistência de permissões.".to_string()
@@ -252,7 +252,7 @@ fn ensure_permissions_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(file_path)
 }
 
-fn read_permissions_file(app: &AppHandle) -> Result<PermissionsFile, String> {
+fn read_permissions_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PermissionsFile, String> {
     let file_path = ensure_permissions_dir(app)?;
     if !file_path.exists() {
         return Ok(PermissionsFile::default());
@@ -270,7 +270,7 @@ fn read_permissions_file(app: &AppHandle) -> Result<PermissionsFile, String> {
     })
 }
 
-fn write_permissions_file(app: &AppHandle, store: &PermissionsFile) -> Result<(), String> {
+fn write_permissions_file<R: tauri::Runtime>(app: &AppHandle<R>, store: &PermissionsFile) -> Result<(), String> {
     let file_path = ensure_permissions_dir(app)?;
     let content = serde_json::to_string_pretty(store)
         .map_err(|error| format!("Não foi possível serializar as permissões: {error}"))?;
@@ -305,7 +305,7 @@ pub fn load_permissions_on_startup(app: &AppHandle) {
 }
 
 /// Persiste o estado atual em `permissions.json`.
-fn persist(app: &AppHandle) -> Result<(), String> {
+fn persist<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let state = app.state::<PermissionsState>();
     let policies = state
         .policies
@@ -431,8 +431,8 @@ fn merge_policy(
 
 /// Resolve ou cria a política de um projeto (helper interno
 /// reutilizado pelo Mission Engine).
-pub fn get_or_create_policy(
-    app: &AppHandle,
+pub fn get_or_create_policy<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     project_id: &str,
 ) -> Result<ProjectExecutionPolicyRecord, String> {
     let state = app.state::<PermissionsState>();

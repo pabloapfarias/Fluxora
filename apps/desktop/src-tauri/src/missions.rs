@@ -144,6 +144,8 @@ pub struct MissionRecord {
     pub updated_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    #[serde(default)]
+    pub final_approval_id: Option<String>,
 }
 
 /// Log de fase/evento da missão (espelha `MissionLog`).
@@ -330,7 +332,7 @@ fn is_path_safe(rel: &str) -> bool {
     true
 }
 
-fn missions_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn missions_file_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let base_dir = app
         .path()
         .app_data_dir()
@@ -338,7 +340,7 @@ fn missions_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base_dir.join("fluxora").join("missions.json"))
 }
 
-fn ensure_missions_dir(app: &AppHandle) -> Result<PathBuf, String> {
+fn ensure_missions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let file_path = missions_file_path(app)?;
     let parent = file_path
         .parent()
@@ -348,7 +350,7 @@ fn ensure_missions_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(file_path)
 }
 
-fn read_missions_file(app: &AppHandle) -> Result<MissionsFile, String> {
+fn read_missions_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<MissionsFile, String> {
     let file_path = ensure_missions_dir(app)?;
     if !file_path.exists() {
         return Ok(MissionsFile::default());
@@ -366,7 +368,7 @@ fn read_missions_file(app: &AppHandle) -> Result<MissionsFile, String> {
     })
 }
 
-fn write_missions_file(app: &AppHandle, store: &MissionsFile) -> Result<(), String> {
+fn write_missions_file<R: tauri::Runtime>(app: &AppHandle<R>, store: &MissionsFile) -> Result<(), String> {
     let file_path = ensure_missions_dir(app)?;
     let content = serde_json::to_string_pretty(store)
         .map_err(|error| format!("Não foi possível serializar as missões: {error}"))?;
@@ -381,7 +383,7 @@ fn write_missions_file(app: &AppHandle, store: &MissionsFile) -> Result<(), Stri
 /// Carrega missões e logs do disco no startup do Tauri.
 /// Falhas de I/O são logadas e descartadas — o app continua
 /// com estado vazio até o usuário criar a primeira missão.
-pub fn load_missions_on_startup(app: &AppHandle) {
+pub fn load_missions_on_startup<R: tauri::Runtime>(app: &AppHandle<R>) {
     match read_missions_file(app) {
         Ok(store) => {
             let missions_count = store.missions.len();
@@ -408,7 +410,7 @@ pub fn load_missions_on_startup(app: &AppHandle) {
 }
 
 /// Persiste o estado atual em `missions.json`.
-fn persist(app: &AppHandle) -> Result<(), String> {
+pub fn persist<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let state = app.state::<MissionsState>();
     let missions = state
         .missions
@@ -463,7 +465,7 @@ fn append_log(
     log
 }
 
-fn update_mission<F>(state: &MissionsState, id: &str, mutator: F) -> Option<MissionRecord>
+pub fn update_mission<F>(state: &MissionsState, id: &str, mutator: F) -> Option<MissionRecord>
 where
     F: FnOnce(&mut MissionRecord),
 {
@@ -478,8 +480,8 @@ where
 // Emissão de eventos `mission/*`
 // ---------------------------------------------------------------------------
 
-fn emit_mission_event(
-    app: &AppHandle,
+fn emit_mission_event<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     kind: &str,
     mission_id: &str,
     project_id: Option<&str>,
@@ -545,8 +547,8 @@ fn default_phase_message(phase: &str) -> &'static str {
     }
 }
 
-fn record_phase(
-    app: &AppHandle,
+fn record_phase<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     state: &MissionsState,
     mission: &MissionRecord,
     phase: &str,
@@ -962,7 +964,7 @@ pub fn missions_ping() -> String {
 
 /// Lista missões (mais recentes primeiro). Aplica cap interno
 /// para evitar resposta gigante.
-pub fn missions_list(app: AppHandle) -> Result<Vec<MissionRecord>, String> {
+pub fn missions_list<R: tauri::Runtime>(app: AppHandle<R>) -> Result<Vec<MissionRecord>, String> {
     let state = app.state::<MissionsState>();
     let guard = state
         .missions
@@ -974,14 +976,14 @@ pub fn missions_list(app: AppHandle) -> Result<Vec<MissionRecord>, String> {
 }
 
 /// Retorna uma missão por `id` (ou `None` se não existir).
-pub fn missions_get(app: AppHandle, id: String) -> Result<Option<MissionRecord>, String> {
+pub fn missions_get<R: tauri::Runtime>(app: AppHandle<R>, id: String) -> Result<Option<MissionRecord>, String> {
     let state = app.state::<MissionsState>();
     Ok(find_mission(&state, &id))
 }
 
 /// Cria uma missão (status inicial: "queued"). NÃO executa.
-pub fn missions_create(
-    app: AppHandle,
+pub fn missions_create<R: tauri::Runtime>(
+    app: AppHandle<R>,
     payload: CreateMissionPayload,
 ) -> Result<MissionRecord, String> {
     let prompt = payload.prompt.trim().to_string();
@@ -1031,6 +1033,7 @@ pub fn missions_create(
         updated_at: now,
         started_at: None,
         completed_at: None,
+        final_approval_id: None,
     };
 
     let state = app.state::<MissionsState>();
@@ -1468,10 +1471,35 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         })),
     );
 
-    // 9. Marcar como completed
+    // 9. Só mostrar sucesso quando o fluxo não depende mais de
+    // aprovação pendente no disco.
+    let final_status = if let Some(proposal_id) = &agents_result.patch_proposal_id {
+        let state_patches = app.state::<patches::PatchesState>();
+        state_patches
+            .proposals
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .iter()
+                    .find(|p| p.id == *proposal_id)
+                    .map(|p| p.status.clone())
+            })
+            .unwrap_or_else(|| "draft".to_string())
+    } else {
+        "completed".to_string()
+    };
     let completed = update_mission(&state, &running.id, |m| {
-        m.status = "completed".to_string();
-        m.completed_at = Some(now_iso());
+        m.status = if final_status == "pending_approval" {
+            "pending_approval".to_string()
+        } else {
+            "completed".to_string()
+        };
+        m.completed_at = if final_status == "pending_approval" {
+            None
+        } else {
+            Some(now_iso())
+        };
         m.current_phase = Some("final-report".to_string());
     })
     .unwrap();
@@ -1479,15 +1507,28 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
     let _ = mark_job_completed(&app, &job_id);
     emit_mission_event(
         &app,
-        "mission/completed",
+        if final_status == "pending_approval" {
+            "mission/phase"
+        } else {
+            "mission/completed"
+        },
         &completed.id,
         Some(&completed.project_id),
-        "info",
-        "Missão concluída.",
-        Some("final-report"),
+        if final_status == "pending_approval" { "warn" } else { "info" },
+        if final_status == "pending_approval" {
+            "Missão aguardando aprovação para aplicar arquivos reais."
+        } else {
+            "Missão concluída."
+        },
+        Some(if final_status == "pending_approval" {
+            "pending-approval"
+        } else {
+            "final-report"
+        }),
         Some(serde_json::json!({
             "resultLength": final_text.chars().count(),
             "jobId": &job_id,
+            "status": final_status,
         })),
     );
 
@@ -1543,7 +1584,7 @@ fn fail_mission(
 
 /// Lê metadados básicos do projeto (nome, stack) sem expor o
 /// `ProjectRecord` completo (que tem campos internos).
-fn find_project_meta(app: &AppHandle, project_id: &str) -> Option<ProjectMeta> {
+fn find_project_meta<R: tauri::Runtime>(app: &AppHandle<R>, project_id: &str) -> Option<ProjectMeta> {
     let store = projects::list(app).ok()?;
     store
         .into_iter()
