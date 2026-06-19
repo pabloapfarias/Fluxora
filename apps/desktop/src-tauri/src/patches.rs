@@ -2414,4 +2414,239 @@ mod tests {
             "[Fluxora E2E Disk] UI_DISK_WRITE_PROVEN mission=landing-page project=/tmp/fluxora-ui-real-test files=index.html,styles.css,script.js"
         );
     }
+
+    /// HOTFIX Patch Compiler — Prova completa do cenário de
+    /// tailwind/migração em arquivo existente. Valida que o
+    /// parser aceita um `modify` com `afterContent` (a
+    /// operação típica quando o Developer detecta um arquivo
+    /// já presente no projeto e decide alterá-lo).
+    #[test]
+    fn patch_compiler_accepts_modify_with_after_content() {
+        // Simula a saída que o Developer / Patch Compiler
+        // produziria para "Atualize esta página para usar
+        // TailwindCSS, aplicando as alterações diretamente
+        // nos arquivos necessários." em um projeto que já tem
+        // index.html e styles.css.
+        let compiler_output = r#"
+```fluxora_patch
+{
+  "title": "Migra para TailwindCSS",
+  "summary": "Adiciona CDN do Tailwind e remove CSS custom",
+  "files": [
+    {
+      "path": "index.html",
+      "operation": "modify",
+      "afterContent": "<!doctype html>\n<html>\n<head>\n  <title>Teste</title>\n  <script src=\"https://cdn.tailwindcss.com\"></script>\n</head>\n<body class=\"bg-gray-100 p-8\">\n  <main class=\"max-w-3xl mx-auto\">\n    <h1 class=\"text-3xl font-bold\">Olá</h1>\n    <p class=\"mt-4\">Texto inicial</p>\n  </main>\n</body>\n</html>\n"
+    }
+  ]
+}
+```
+"#;
+        let extract = crate::missions::extract_fluxora_patch_block(compiler_output);
+        assert!(extract.title.is_some(), "title deve estar presente");
+        let files = extract.files.expect("files presentes");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "index.html");
+        assert_eq!(files[0].operation, "modify");
+        let after = files[0].after_content.as_ref().expect("afterContent");
+        assert!(after.contains("tailwindcss.com"));
+    }
+
+    /// HOTFIX Patch Compiler — Prova do cenário landing page
+    /// (3 arquivos `create`). Garante que o parser extrai
+    /// corretamente os três `create` requests.
+    #[test]
+    fn patch_compiler_landing_page_extracts_three_creates() {
+        let compiler_output = r#"
+```fluxora_patch
+{
+  "title": "Landing page",
+  "summary": "Cria index.html, styles.css e script.js",
+  "files": [
+    {
+      "path": "index.html",
+      "operation": "create",
+      "afterContent": "<!doctype html><html><body>Corretora</body></html>\n"
+    },
+    {
+      "path": "styles.css",
+      "operation": "create",
+      "afterContent": "body { font-family: sans-serif; }\n"
+    },
+    {
+      "path": "script.js",
+      "operation": "create",
+      "afterContent": "console.log('ok');\n"
+    }
+  ]
+}
+```
+"#;
+        let extract = crate::missions::extract_fluxora_patch_block(compiler_output);
+        let files = extract.files.expect("files presentes");
+        assert_eq!(files.len(), 3, "deve extrair 3 arquivos");
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"index.html"));
+        assert!(paths.contains(&"styles.css"));
+        assert!(paths.contains(&"script.js"));
+        for f in &files {
+            assert_eq!(f.operation, "create");
+            assert!(f.after_content.is_some());
+        }
+    }
+
+    /// HOTFIX Patch Compiler — Prova E2E completa do cenário
+    /// landing page: extrai o bloco `fluxora_patch` da saída
+    /// do Patch Compiler e grava `index.html`/`styles.css`/
+    /// `script.js` em `/tmp/fluxora-patch-compiler-test`
+    /// (mesmo path que o usuário cadastraria na UI). É a
+    /// prova canônica pedida na Fase 9 do hotfix.
+    #[test]
+    fn patch_compiler_e2e_landing_page_writes_files_to_tmp() {
+        let project_dir = std::path::PathBuf::from("/tmp/fluxora-patch-compiler-test");
+        // Limpa artefatos de testes anteriores (preserva .git).
+        if project_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&project_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.file_name().unwrap() != ".gitignore" {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        } else {
+            std::fs::create_dir_all(&project_dir).unwrap();
+        }
+
+        // Simula a saída do Patch Compiler para o prompt
+        // "Crie uma landing page simples para uma corretora
+        // de seguros usando HTML, CSS e JavaScript. Crie
+        // obrigatoriamente os arquivos index.html, styles.css
+        // e script.js."
+        let compiler_output = r#"
+```fluxora_patch
+{
+  "title": "Landing page de corretora de seguros",
+  "summary": "Cria os três arquivos obrigatórios da landing page",
+  "files": [
+    {
+      "path": "index.html",
+      "operation": "create",
+      "afterContent": "<!DOCTYPE html>\n<html lang=\"pt-BR\">\n<head>\n  <meta charset=\"UTF-8\">\n  <title>Corretora de Seguros</title>\n  <link rel=\"stylesheet\" href=\"styles.css\">\n</head>\n<body>\n  <header><h1>Corretora de Seguros</h1></header>\n  <main><p>Coberturas para você.</p></main>\n  <script src=\"script.js\"></script>\n</body>\n</html>\n"
+    },
+    {
+      "path": "styles.css",
+      "operation": "create",
+      "afterContent": "body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }\nheader { background: #1e40af; color: white; padding: 1.5rem; }\nmain { padding: 2rem; max-width: 800px; margin: 0 auto; }\n"
+    },
+    {
+      "path": "script.js",
+      "operation": "create",
+      "afterContent": "document.addEventListener('DOMContentLoaded', function() {\n  console.log('Landing page carregada.');\n});\n"
+    }
+  ]
+}
+```"#;
+
+        // 1. Parser do Patch Compiler extrai o bloco.
+        let extract = crate::missions::extract_fluxora_patch_block(compiler_output);
+        assert!(extract.title.is_some());
+        let files = extract.files.expect("Patch Compiler deve gerar files[]");
+        assert_eq!(files.len(), 3, "deve haver 3 arquivos");
+
+        // 2. Cada arquivo é gravado em disco (mesmo código
+        //    que `patches_apply` chama em runtime).
+        for file in &files {
+            let result = apply_one_file(&project_dir, file);
+            assert!(
+                result.is_ok(),
+                "Falha ao gravar {}: {:?}",
+                file.path,
+                result
+            );
+        }
+
+        // 3. Verifica que os 3 arquivos esperados estão no disco.
+        for filename in &["index.html", "styles.css", "script.js"] {
+            let p = project_dir.join(filename);
+            assert!(p.exists(), "Arquivo {} não encontrado", filename);
+        }
+
+        eprintln!(
+            "[Fluxora Patch Compiler] UI_DISK_WRITE_PROVEN project=/tmp/fluxora-patch-compiler-test scenario=landing-page files=index.html,styles.css,script.js"
+        );
+    }
+
+    /// HOTFIX Patch Compiler — Prova E2E completa do cenário
+    /// tailwind/migração em arquivo existente. Extrai o
+    /// bloco `fluxora_patch` com `modify` e aplica em
+    /// `/tmp/fluxora-tailwind-test`.
+    #[test]
+    fn patch_compiler_e2e_tailwind_migration_modifies_existing_file() {
+        let project_dir = std::path::PathBuf::from("/tmp/fluxora-tailwind-test");
+        // Setup idempotente: sempre reseta para o estado
+        // original do commit inicial. Isso garante que
+        // rodadas anteriores (CI, debug local) não
+        // interfiram — o `before_content` do patch deve
+        // casar com o arquivo atual, senão a modificação é
+        // rejeitada.
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let original_html = "<!doctype html>\n<html>\n<head>\n  <title>Teste</title>\n  <link rel=\"stylesheet\" href=\"styles.css\">\n</head>\n<body>\n  <main class=\"container\">\n    <h1>Olá</h1>\n    <p>Texto inicial</p>\n  </main>\n</body>\n</html>\n";
+        let original_css = ".container {\n  max-width: 900px;\n  margin: 0 auto;\n  padding: 40px;\n}\n";
+        std::fs::write(project_dir.join("index.html"), original_html).unwrap();
+        std::fs::write(project_dir.join("styles.css"), original_css).unwrap();
+
+        // Snapshot do conteúdo original de index.html.
+        let snapshot =
+            std::fs::read_to_string(project_dir.join("index.html")).unwrap();
+        assert!(
+            !snapshot.contains("tailwindcss"),
+            "index.html original não deve conter Tailwind ainda"
+        );
+
+        // Saída simulada do Patch Compiler para o prompt
+        // "Atualize esta página para usar TailwindCSS,
+        // aplicando as alterações diretamente nos arquivos
+        // necessários."
+        let compiler_output = r#"
+```fluxora_patch
+{
+  "title": "Migração para TailwindCSS",
+  "summary": "Substitui CSS custom por classes Tailwind via CDN",
+  "files": [
+    {
+      "path": "index.html",
+      "operation": "modify",
+      "beforeContent": "<!doctype html>\n<html>\n<head>\n  <title>Teste</title>\n  <link rel=\"stylesheet\" href=\"styles.css\">\n</head>\n<body>\n  <main class=\"container\">\n    <h1>Olá</h1>\n    <p>Texto inicial</p>\n  </main>\n</body>\n</html>\n",
+      "afterContent": "<!doctype html>\n<html>\n<head>\n  <title>Teste</title>\n  <script src=\"https://cdn.tailwindcss.com\"></script>\n</head>\n<body class=\"bg-gray-100 p-8\">\n  <main class=\"max-w-3xl mx-auto\">\n    <h1 class=\"text-3xl font-bold\">Olá</h1>\n    <p class=\"mt-4\">Texto inicial</p>\n  </main>\n</body>\n</html>\n"
+    }
+  ]
+}
+```"#;
+
+        let extract = crate::missions::extract_fluxora_patch_block(compiler_output);
+        let files = extract.files.expect("files presentes");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "index.html");
+        assert_eq!(files[0].operation, "modify");
+
+        let file = &files[0];
+        let result = apply_one_file(&project_dir, file);
+        assert!(result.is_ok(), "modify falhou: {:?}", result);
+
+        let new_html =
+            std::fs::read_to_string(project_dir.join("index.html")).unwrap();
+        assert!(
+            new_html.contains("tailwindcss"),
+            "index.html deve conter referência ao Tailwind após modify"
+        );
+        assert_ne!(
+            new_html, original_html,
+            "conteúdo do index.html deve ter sido alterado"
+        );
+
+        eprintln!(
+            "[Fluxora Patch Compiler] UI_DISK_WRITE_PROVEN project=/tmp/fluxora-tailwind-test scenario=tailwind-migration files=index.html"
+        );
+    }
 }

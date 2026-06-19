@@ -838,8 +838,11 @@ aplica alterações diretamente — apenas propõe.",
 // A resposta textual (sem o bloco) continua sendo salva em
 // `MissionRun.resultText` para o usuário ler.
 
-const FLUXORA_PATCH_MARKER: &str = "```fluxora_patch";
-const FLUXORA_PATCH_END: &str = "```";
+// HOTFIX Patch Compiler — O parser (em `extract_fluxora_patch_block`)
+// aceita três formatos:
+// 1. Bloco ```fluxora_patch ... ``` (canônico).
+// 2. Bloco ```json ... ``` com a mesma forma.
+// 3. JSON puro (a resposta inteira é um objeto com title/summary/files).
 
 /// Resultado do parser do bloco `fluxora_patch`.
 #[derive(Debug, Clone)]
@@ -864,116 +867,168 @@ pub(crate) struct FluxoraPatchExtract {
 /// extraídos (se houver). Não falha se o bloco não estiver
 /// presente ou estiver malformado — apenas devolve
 /// `raw_json: None` ou `files: None` conforme o caso.
+///
+/// HOTFIX Patch Compiler — além do bloco `fluxora_patch`,
+/// aceita também:
+/// 1. Bloco `json` com a mesma forma.
+/// 2. JSON puro (a resposta inteira é um objeto com title/
+///    summary/files).
 pub(crate) fn extract_fluxora_patch_block(text: &str) -> FluxoraPatchExtract {
-    let marker_pos = match text.find(FLUXORA_PATCH_MARKER) {
-        Some(pos) => pos,
-        None => {
+    // 1. Tenta primeiro o bloco `fluxora_patch` (canônico).
+    if let Some(result) = extract_fenced_block(text, "fluxora_patch") {
+        if let Some(extracted) = parse_patch_json(&result.raw_json) {
             return FluxoraPatchExtract {
-                cleaned_text: text.to_string(),
-                raw_json: None,
-                files: None,
-                title: None,
-                summary: None,
+                cleaned_text: result.cleaned_text,
+                raw_json: Some(result.raw_json),
+                files: extracted.files,
+                title: extracted.title,
+                summary: extracted.summary,
             };
         }
-    };
-    // Encontra o início do JSON (após o marker)
-    let after_marker = marker_pos + FLUXORA_PATCH_MARKER.len();
+    }
+    // 2. Tenta o bloco `json` (alguns providers usam esse
+    //    marcador para o JSON da proposta).
+    if let Some(result) = extract_fenced_block(text, "json") {
+        if let Some(extracted) = parse_patch_json(&result.raw_json) {
+            return FluxoraPatchExtract {
+                cleaned_text: result.cleaned_text,
+                raw_json: Some(result.raw_json),
+                files: extracted.files,
+                title: extracted.title,
+                summary: extracted.summary,
+            };
+        }
+    }
+    // 3. Tenta JSON puro na resposta inteira.
+    let trimmed = text.trim();
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        if let Some(extracted) = parse_patch_json(trimmed) {
+            if extracted.files.is_some() {
+                return FluxoraPatchExtract {
+                    cleaned_text: String::new(),
+                    raw_json: Some(trimmed.to_string()),
+                    files: extracted.files,
+                    title: extracted.title,
+                    summary: extracted.summary,
+                };
+            }
+        }
+    }
+    // 4. Sem patch.
+    FluxoraPatchExtract {
+        cleaned_text: text.to_string(),
+        raw_json: None,
+        files: None,
+        title: None,
+        summary: None,
+    }
+}
+
+struct FencedBlockExtract {
+    raw_json: String,
+    cleaned_text: String,
+}
+
+fn extract_fenced_block(text: &str, lang: &str) -> Option<FencedBlockExtract> {
+    let open = format!("```{lang}");
+    let marker_pos = text.find(&open)?;
+    let after_marker = marker_pos + open.len();
     let rest = &text[after_marker..];
-    // Pula \n ou \r\n após o marker
     let rest = rest.trim_start_matches(|c| c == '\n' || c == '\r');
-    // Encontra o fim do bloco (próximo ```)
-    let end_pos = match rest.find(FLUXORA_PATCH_END) {
-        Some(pos) => pos,
-        None => {
-            return FluxoraPatchExtract {
-                cleaned_text: text.to_string(),
-                raw_json: None,
-                files: None,
-                title: None,
-                summary: None,
-            };
-        }
-    };
+    let end_pos = rest.find("```")?;
     let raw_json = rest[..end_pos].trim().to_string();
-    // Limpa o texto removendo o bloco inteiro (incluindo o
-    // ```fluxora_patch e o ``` final). A linha onde o bloco
-    // começa e o trailing newline são removidos.
     let mut cleaned = String::with_capacity(text.len());
     cleaned.push_str(&text[..marker_pos]);
-    let after_end = after_marker + (rest.len() - end_pos) + FLUXORA_PATCH_END.len();
+    let after_end = after_marker + (rest.len() - end_pos) + 3;
     cleaned.push_str(&text[after_end..]);
-    let cleaned = cleaned.trim_end_matches(|c: char| c == '\n' || c == ' ').to_string();
-    // Tenta parsear o JSON
-    let parsed: Option<serde_json::Value> = serde_json::from_str(&raw_json)
-        .map_err(|e| {
-            eprintln!("[fluxora missions] bloco fluxora_patch inválido (JSON): {e}");
-            e
-        })
-        .ok();
-    let (mut title, mut summary, mut files): (Option<String>, Option<String>, Option<Vec<patches::PatchFileChangeRecord>>) =
-        (None, None, None);
-    if let Some(value) = parsed {
-        if let Some(t) = value.get("title").and_then(|v| v.as_str()) {
-            title = Some(t.to_string());
+    let cleaned = cleaned
+        .trim_end_matches(|c: char| c == '\n' || c == ' ')
+        .to_string();
+    Some(FencedBlockExtract { raw_json, cleaned_text: cleaned })
+}
+
+struct ParsedPatch {
+    title: Option<String>,
+    summary: Option<String>,
+    files: Option<Vec<patches::PatchFileChangeRecord>>,
+}
+
+fn parse_patch_json(raw_json: &str) -> Option<ParsedPatch> {
+    let value: serde_json::Value = match serde_json::from_str(raw_json) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "[Fluxora Patch Compiler] parse_failed reason=invalid_json detail={e}"
+            );
+            return None;
         }
-        if let Some(s) = value.get("summary").and_then(|v| v.as_str()) {
-            summary = Some(s.to_string());
-        }
-        if let Some(arr) = value.get("files").and_then(|v| v.as_array()) {
-            let mut out: Vec<patches::PatchFileChangeRecord> = Vec::new();
-            for (idx, item) in arr.iter().enumerate() {
-                let path = item
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let operation = item
-                    .get("operation")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let after_content = item
-                    .get("afterContent")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let before_content = item
-                    .get("beforeContent")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let unified_diff = item
-                    .get("unifiedDiff")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let additions = item.get("additions").and_then(|v| v.as_u64()).map(|n| n as u32);
-                let deletions = item.get("deletions").and_then(|v| v.as_u64()).map(|n| n as u32);
-                if path.is_none() || operation.is_none() {
-                    eprintln!(
-                        "[fluxora missions] bloco fluxora_patch: arquivo #{} sem path ou operation",
-                        idx + 1
-                    );
-                    continue;
-                }
-                out.push(patches::PatchFileChangeRecord {
-                    path: path.unwrap(),
-                    operation: operation.unwrap(),
-                    before_content,
-                    after_content,
-                    unified_diff,
-                    additions,
-                    deletions,
-                    is_new_file: None,
-                    is_deleted_file: None,
-                });
+    };
+    let mut title = None;
+    let mut summary = None;
+    let mut files: Option<Vec<patches::PatchFileChangeRecord>> = None;
+    if let Some(t) = value.get("title").and_then(|v| v.as_str()) {
+        title = Some(t.to_string());
+    }
+    if let Some(s) = value.get("summary").and_then(|v| v.as_str()) {
+        summary = Some(s.to_string());
+    }
+    if let Some(arr) = value.get("files").and_then(|v| v.as_array()) {
+        let mut out: Vec<patches::PatchFileChangeRecord> = Vec::new();
+        for (idx, item) in arr.iter().enumerate() {
+            let path = item
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let operation = item
+                .get("operation")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let after_content = item
+                .get("afterContent")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let before_content = item
+                .get("beforeContent")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let unified_diff = item
+                .get("unifiedDiff")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let additions = item.get("additions").and_then(|v| v.as_u64()).map(|n| n as u32);
+            let deletions = item.get("deletions").and_then(|v| v.as_u64()).map(|n| n as u32);
+            if path.is_none() || operation.is_none() {
+                eprintln!(
+                    "[Fluxora Patch Compiler] parse_failed reason=missing_field detail=file#{} path_or_operation_missing",
+                    idx + 1
+                );
+                continue;
             }
-            files = Some(out);
+            out.push(patches::PatchFileChangeRecord {
+                path: path.unwrap(),
+                operation: operation.unwrap(),
+                before_content,
+                after_content,
+                unified_diff,
+                additions,
+                deletions,
+                is_new_file: None,
+                is_deleted_file: None,
+            });
         }
+        if !out.is_empty() {
+            files = Some(out);
+        } else {
+            eprintln!(
+                "[Fluxora Patch Compiler] parse_failed reason=empty_files detail=no valid file entries"
+            );
+        }
+    } else {
+        eprintln!(
+            "[Fluxora Patch Compiler] parse_failed reason=no_files_array detail=missing files[]"
+        );
     }
-    FluxoraPatchExtract {
-        cleaned_text: cleaned,
-        raw_json: Some(raw_json),
-        files,
-        title,
-        summary,
-    }
+    Some(ParsedPatch { title, summary, files })
 }
 
 // ---------------------------------------------------------------------------
@@ -1563,11 +1618,11 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
     }
 
     // 7. Valida se nenhum patch foi gerado para missões de criação/alteração
-    let has_creation_verbs = has_creation_request(&running.prompt);
+    let intent_requires_patch = intent_requires_patch(&running.prompt);
 
     let final_text = if agents_result.patch_proposal_id.is_none() {
-        if has_creation_verbs {
-            let err = "A missão pediu criação/alteração de arquivos, mas o Developer não retornou um bloco fluxora_patch válido após a tentativa de correção. Nenhum arquivo foi criado.".to_string();
+        if intent_requires_patch {
+            let err = "A missão pediu alteração real de arquivos, mas nenhum patch aplicável foi gerado. Nenhum arquivo foi criado.".to_string();
             fail_mission(&app, &state, &running, &err, Some(&job_id));
             return Err(err);
         } else {
@@ -1577,7 +1632,32 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
             text
         }
     } else {
-        agents_result.finalizer_output
+        // HOTFIX Patch Compiler — Se o patch foi gerado,
+        // injeta a nota "Proposta criada, aguardando
+        // aprovação" no output do Finalizer, para que o
+        // usuário não veja "Nenhuma patch foi gerada".
+        let proposal_status = app
+            .state::<patches::PatchesState>()
+            .proposals
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .iter()
+                    .find(|p| Some(&p.mission_id) == Some(&running.id) || p.id == agents_result.patch_proposal_id.as_deref().unwrap_or(""))
+                    .map(|p| p.status.clone())
+            })
+            .unwrap_or_else(|| "draft".to_string());
+        let note = if proposal_status == "applied" {
+            "\n\n✅ Arquivos aplicados no projeto."
+        } else if proposal_status == "pending_approval" {
+            "\n\n📋 Proposta criada. Aprove para aplicar os arquivos no projeto."
+        } else {
+            "\n\n📋 Proposta de alteração criada. Verifique a aba Arquivos."
+        };
+        let mut text = agents_result.finalizer_output;
+        text.push_str(note);
+        text
     };
 
     // 8. Final report — usa o output do Finalizer (que já
@@ -2153,23 +2233,37 @@ pub fn has_creation_request(prompt: &str) -> bool {
         || lower.contains("criar")
         || lower.contains("cria")
         || lower.contains("criação")
+        || lower.contains("criacao")
+        || lower.contains("criar ")
         || lower.contains("edite")
         || lower.contains("editar")
         || lower.contains("edita")
         || lower.contains("altere")
         || lower.contains("alterar")
         || lower.contains("altera")
+        || lower.contains("alteração")
+        || lower.contains("alteracao")
         || lower.contains("implemente")
         || lower.contains("implementar")
+        || lower.contains("implementa")
         || lower.contains("construa")
         || lower.contains("construir")
+        || lower.contains("construi")
         || lower.contains("adicione")
         || lower.contains("adicionar")
+        || lower.contains("adiciona")
         || lower.contains("escreva")
         || lower.contains("escrever")
+        || lower.contains("escreve")
         || lower.contains("gere")
         || lower.contains("gerar")
+        || lower.contains("gera")
         || lower.contains("faça uma página")
+        || lower.contains("faca uma pagina")
+        || lower.contains("fazer uma página")
+        || lower.contains("fazer uma pagina")
+        || lower.contains("crie uma página")
+        || lower.contains("crie uma pagina")
         || lower.contains("landing page")
         || lower.contains("componente")
         || lower.contains("arquivo")
@@ -2178,6 +2272,140 @@ pub fn has_creation_request(prompt: &str) -> bool {
         || lower.contains("write")
         || lower.contains("implement")
         || lower.contains("build")
+        || lower.contains("tailwind")
+        || lower.contains("tailwindcss")
+        || lower.contains("migre")
+        || lower.contains("migrar")
+        || lower.contains("migra")
+        || lower.contains("migração")
+        || lower.contains("migracao")
+        || lower.contains("corrija")
+        || lower.contains("corrigir")
+        || lower.contains("corrige")
+        || lower.contains("refatore")
+        || lower.contains("refatorar")
+        || lower.contains("refatora")
+        || lower.contains("troque")
+        || lower.contains("trocar")
+        || lower.contains("substitua")
+        || lower.contains("substituir")
+        || lower.contains("aplique")
+        || lower.contains("aplicar")
+        || lower.contains("use tailwind")
+        || lower.contains("usar tailwind")
+        || lower.contains("usar tailwindcss")
+        || lower.contains("página")
+        || lower.contains("pagina")
+        || lower.contains("site")
+        || lower.contains("tela")
+        || lower.contains("tela inicial")
+        || lower.contains("frontend")
+        || lower.contains("backend")
+        || lower.contains("api")
+        || lower.contains("rota")
+        || lower.contains("endpoint")
+        || lower.contains("componente")
+        || lower.contains("função")
+        || lower.contains("funcao")
+        || lower.contains("método")
+        || lower.contains("metodo")
+        || lower.contains("classe")
+        || lower.contains("migration")
+        || lower.contains("schema")
+        || lower.contains("modelo")
+        || lower.contains("model")
+        || lower.contains("view")
+        || lower.contains("controller")
+        || lower.contains("service")
+        || lower.contains("test")
+        || lower.contains("teste")
+        || lower.contains("fix")
+        || lower.contains("bug")
+        || lower.contains("issue")
+}
+
+/// HOTFIX Patch Compiler — Detecta intenção de MODIFICAÇÃO
+/// (alterar, migrar, atualizar, refatorar) de arquivos
+/// existentes. Retorna `true` quando o prompt do usuário
+/// indica que ele quer alterar algo que já existe.
+pub fn has_modification_request(prompt: &str) -> bool {
+    let lower = prompt.to_lowercase();
+    lower.contains("atualize")
+        || lower.contains("atualizar")
+        || lower.contains("atualiza")
+        || lower.contains("atualização")
+        || lower.contains("atualizacao")
+        || lower.contains("altere")
+        || lower.contains("alterar")
+        || lower.contains("altera")
+        || lower.contains("alteração")
+        || lower.contains("alteracao")
+        || lower.contains("migre")
+        || lower.contains("migrar")
+        || lower.contains("migra")
+        || lower.contains("migração")
+        || lower.contains("migracao")
+        || lower.contains("refatore")
+        || lower.contains("refatorar")
+        || lower.contains("refatora")
+        || lower.contains("corrija")
+        || lower.contains("corrigir")
+        || lower.contains("corrige")
+        || lower.contains("edite")
+        || lower.contains("editar")
+        || lower.contains("edita")
+        || lower.contains("modifique")
+        || lower.contains("modificar")
+        || lower.contains("modifica")
+        || lower.contains("use tailwind")
+        || lower.contains("usar tailwind")
+        || lower.contains("usar tailwindcss")
+        || lower.contains("tailwind")
+        || lower.contains("troque")
+        || lower.contains("trocar")
+        || lower.contains("substitua")
+        || lower.contains("substituir")
+        || lower.contains("aplique")
+        || lower.contains("aplicar")
+        || lower.contains("update")
+        || lower.contains("upgrade")
+        || lower.contains("migrate")
+        || lower.contains("refactor")
+        || lower.contains("edit")
+        || lower.contains("modify")
+        || lower.contains("change")
+        || lower.contains("replace")
+        || lower.contains("switch")
+        || lower.contains("convert")
+        || lower.contains("transform")
+        || lower.contains("rewrite")
+        || lower.contains("tweak")
+        || lower.contains("ajuste")
+        || lower.contains("ajustar")
+        || lower.contains("ajusta")
+        || lower.contains("adicione a")
+        || lower.contains("adicionar a")
+        || lower.contains("adicione ao")
+        || lower.contains("adicionar ao")
+        || lower.contains("adicione em")
+        || lower.contains("adicionar em")
+        || lower.contains("adicione no")
+        || lower.contains("adicionar no")
+        || lower.contains("remova")
+        || lower.contains("remover")
+        || lower.contains("delete")
+        || lower.contains("deletar")
+        || lower.contains("apague")
+        || lower.contains("apagar")
+}
+
+/// HOTFIX Patch Compiler — Detecta se o prompt exige um
+/// patch (criação ou modificação de arquivos). Usado para
+/// aplicar a regra dura de sucesso/falha: missões com
+/// `intent_requires_patch=true` não podem terminar como
+/// `completed` sem uma `PatchProposal`.
+pub fn intent_requires_patch(prompt: &str) -> bool {
+    has_creation_request(prompt) || has_modification_request(prompt)
 }
 
 #[cfg(test)]
@@ -2229,5 +2457,128 @@ mod tests {
         // de prompt sem precisar de I/O.
         let too_long = "a".repeat(MAX_PROMPT_LENGTH + 1);
         assert!(too_long.chars().count() > MAX_PROMPT_LENGTH);
+    }
+
+    // -------------------------------------------------------------------
+    // HOTFIX Patch Compiler — testes do parser
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parser_accepts_fenced_fluxora_patch_block() {
+        let text = r#"Vou criar os arquivos.
+
+```fluxora_patch
+{
+  "title": "Landing page",
+  "summary": "Cria index.html, styles.css e script.js",
+  "files": [
+    { "path": "index.html", "operation": "create", "afterContent": "<!doctype html>" }
+  ]
+}
+```
+"#;
+        let extract = extract_fluxora_patch_block(text);
+        assert_eq!(extract.title.as_deref(), Some("Landing page"));
+        let files = extract.files.expect("files presentes");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "index.html");
+        assert_eq!(files[0].operation, "create");
+        assert_eq!(files[0].after_content.as_deref(), Some("<!doctype html>"));
+    }
+
+    #[test]
+    fn parser_accepts_fenced_json_block() {
+        let text = r#"
+```json
+{
+  "title": "Atualiza para Tailwind",
+  "summary": "Substitui CSS por classes Tailwind",
+  "files": [
+    { "path": "index.html", "operation": "modify", "afterContent": "<html>" }
+  ]
+}
+```
+"#;
+        let extract = extract_fluxora_patch_block(text);
+        assert_eq!(extract.title.as_deref(), Some("Atualiza para Tailwind"));
+        let files = extract.files.expect("files presentes");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "index.html");
+        assert_eq!(files[0].operation, "modify");
+    }
+
+    #[test]
+    fn parser_accepts_pure_json() {
+        let text = r#"{
+  "title": "Cria componente",
+  "files": [
+    { "path": "src/Foo.tsx", "operation": "create", "afterContent": "export const Foo = () => null;" }
+  ]
+}"#;
+        let extract = extract_fluxora_patch_block(text);
+        assert_eq!(extract.title.as_deref(), Some("Cria componente"));
+        let files = extract.files.expect("files presentes");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "src/Foo.tsx");
+    }
+
+    #[test]
+    fn parser_returns_none_when_no_block() {
+        let extract = extract_fluxora_patch_block(
+            "Eu criaria o arquivo index.html, mas não vou retornar patch agora.",
+        );
+        assert!(extract.files.is_none());
+        assert!(extract.title.is_none());
+    }
+
+    #[test]
+    fn parser_rejects_block_without_files() {
+        let text = r#"```fluxora_patch
+{ "title": "vazio", "summary": "", "files": [] }
+```"#;
+        let extract = extract_fluxora_patch_block(text);
+        assert!(extract.files.is_none());
+    }
+
+    // -------------------------------------------------------------------
+    // HOTFIX Patch Compiler — testes de detecção de intenção
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn intent_recognizes_landing_page() {
+        assert!(intent_requires_patch(
+            "Crie uma landing page simples para uma corretora de seguros"
+        ));
+    }
+
+    #[test]
+    fn intent_recognizes_tailwind_migration() {
+        assert!(intent_requires_patch(
+            "Atualize esta página para usar TailwindCSS"
+        ));
+        assert!(intent_requires_patch(
+            "Faça a migração para TailwindCSS nesta página"
+        ));
+    }
+
+    #[test]
+    fn intent_recognizes_explicit_file_creation() {
+        assert!(intent_requires_patch(
+            "Crie os arquivos index.html styles.css e script.js"
+        ));
+    }
+
+    #[test]
+    fn intent_recognizes_modify() {
+        assert!(intent_requires_patch("Edite o arquivo de configuração"));
+        assert!(intent_requires_patch("Atualize o componente Navbar"));
+        assert!(intent_requires_patch("Migre a base de dados para Postgres"));
+    }
+
+    #[test]
+    fn intent_does_not_match_plain_question() {
+        assert!(!intent_requires_patch("O que é Rust?"));
+        assert!(!intent_requires_patch("Explique como funciona o React"));
+        assert!(!intent_requires_patch("Liste as boas práticas de Tauri"));
     }
 }

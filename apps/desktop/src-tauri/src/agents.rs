@@ -982,6 +982,163 @@ pub fn agent_steps_get(app: AppHandle, id: String) -> Result<Option<AgentStepRec
 }
 
 // ---------------------------------------------------------------------------
+// HOTFIX Patch Compiler — Etapa obrigatória que transforma a
+// saída do Developer em um bloco `fluxora_patch` válido.
+// ---------------------------------------------------------------------------
+//
+// O Developer é criativo — pode responder com plano, "eu
+// faria", markdown, etc. Quando a missão pede criação ou
+// alteração de arquivos (`intent_requires_patch=true`), o
+// Fluxora NÃO pode confiar que o Developer vai entregar um
+// bloco `fluxora_patch` válido na primeira chamada.
+//
+// O Patch Compiler é uma chamada dedicada a provider com um
+// prompt estrito que exige SOMENTE o bloco `fluxora_patch`
+// como saída. Roda sempre que o Developer não gera patch
+// válido e a missão exige patch. Se o Compiler também
+// falhar, a missão é marcada como `failed` (em modo
+// `intent_requires_patch`).
+//
+// O Compiler também é executado proativamente quando o
+// Developer gera um patch mas com `filesCount=0` ou
+// `path`/`operation` inválidos — neste caso, o Compiler
+// reescreve o output para garantir que apenas arquivos
+// válidos entrem no `create_proposal_from_provider_text`.
+
+/// System prompt estrito do Patch Compiler. Exige
+/// EXCLUSIVAMENTE o bloco `fluxora_patch` como saída — sem
+/// markdown, sem plano, sem explicações antes ou depois.
+pub(crate) const PATCH_COMPILER_PROMPT: &str = "Você é o Patch Compiler do Fluxora.\n\
+Sua única tarefa é transformar a solução proposta em um bloco fluxora_patch válido.\n\
+Retorne SOMENTE o bloco abaixo, sem explicações antes ou depois, sem markdown adicional:\n\n\
+```fluxora_patch\n\
+{\n  \"title\": \"Título curto da alteração\",\n  \"summary\": \"Resumo objetivo da alteração\",\n  \"files\": [\n    {\n      \"path\": \"caminho/relativo/arquivo.ext\",\n      \"operation\": \"create\",\n      \"afterContent\": \"conteúdo completo final do arquivo\"\n    }\n  ]\n}\n\
+```\n\n\
+Regras obrigatórias:\n\
+- Use paths relativos ao projeto. Nunca use path absoluto.\n\
+- Nunca use ..\n\
+- Nunca escreva em .git, node_modules, vendor, dist, build, target, .next, .cache, .turbo, out.\n\
+- Para criar arquivo, use operation \"create\".\n\
+- Para editar arquivo existente, use operation \"modify\" (com afterContent sendo o conteúdo completo final).\n\
+- Para create/modify, afterContent deve conter o conteúdo completo final (NUNCA placeholders, NUNCA snippets, NUNCA \"...\" no meio).\n\
+- Se a missão pedir uma landing page simples e o projeto está vazio, crie obrigatoriamente index.html, styles.css e script.js.\n\
+- Se a missão pedir migrar/alterar um arquivo existente (ex.: 'use Tailwind'), modifique o arquivo existente (index.html e/ou styles.css).\n\
+- Não responda com plano. Não diga que não pode. Não peça mais contexto. Apenas gere o patch.\n\
+- O bloco deve ser o ÚNICO conteúdo da resposta.";
+
+/// Resultado do Patch Compiler.
+pub(crate) struct PatchCompilerResult {
+    /// JSON do patch parseado (se sucesso).
+    pub files: Option<Vec<crate::patches::PatchFileChangeRecord>>,
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    /// Output bruto do provider (para diagnóstico).
+    pub raw_output: String,
+    /// Status textual.
+    pub status: PatchCompilerStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PatchCompilerStatus {
+    /// Provider retornou um bloco `fluxora_patch` válido.
+    Compiled,
+    /// Provider retornou algo, mas o parser rejeitou.
+    ParseFailed,
+    /// Provider falhou (rede, autenticação, etc.).
+    ProviderFailed,
+}
+
+/// Roda o Patch Compiler sobre a saída do Developer.
+/// Retorna `None` se o provider falhou, ou `Some(result)`
+/// com o que foi possível extrair.
+pub(crate) fn run_patch_compiler(
+    app: &AppHandle,
+    ctx: &MissionAgentContext,
+    developer_output: &str,
+    planner_summary: Option<&str>,
+    step_id: &str,
+) -> Option<PatchCompilerResult> {
+    // 1. Constrói o prompt estrito.
+    let user_message = format!(
+        "Missão do usuário: {prompt}\n\n\
+         Plano do Planner:\n{plan}\n\n\
+         Proposta do Developer (resposta completa, possivelmente sem patch):\n{dev}\n\n\
+         Sua tarefa: gerar APENAS o bloco fluxora_patch com title, summary e files. \
+         Não explique. Não faça plano. Apenas gere o JSON dentro do bloco.",
+        prompt = ctx.user_prompt,
+        plan = planner_summary.unwrap_or("(Planner não produziu plano)"),
+        dev = developer_output,
+    );
+    let messages = vec![
+        providers::ChatMessagePayload {
+            role: "system".to_string(),
+            content: PATCH_COMPILER_PROMPT.to_string(),
+        },
+        providers::ChatMessagePayload {
+            role: "user".to_string(),
+            content: user_message,
+        },
+    ];
+    let provider_id = ctx.default_provider_id;
+    let model = ctx.default_model;
+
+    // 2. Chama o provider (sem streaming para acelerar — o
+    //    Compiler deve responder curto, só o bloco).
+    let result = providers::execute_mission_chat(
+        app,
+        provider_id,
+        model,
+        &messages,
+        Some(3072),
+    );
+
+    let chat = match result {
+        Ok(c) => c,
+        Err(error) => {
+            eprintln!(
+                "[Fluxora Patch Compiler] compilerCalled=true compilerHasPatch=false parseStatus=provider_failed parseError={} missionId={} projectId={}",
+                truncate_error(&error),
+                ctx.mission.id,
+                ctx.mission.project_id,
+            );
+            return Some(PatchCompilerResult {
+                files: None,
+                title: None,
+                summary: None,
+                raw_output: String::new(),
+                status: PatchCompilerStatus::ProviderFailed,
+            });
+        }
+    };
+
+    // 3. Extrai o bloco.
+    let truncated = truncate_output(&chat.text);
+    let extract = missions::extract_fluxora_patch_block(&truncated);
+    let has_patch = extract.files.as_ref().map(|f| !f.is_empty()).unwrap_or(false) && extract.title.is_some();
+    eprintln!(
+        "[Fluxora Patch Compiler] compilerCalled=true compilerHasPatch={} parseStatus={} parseError={} missionId={} projectId={} filesCount={}",
+        has_patch,
+        if has_patch { "ok" } else { "parse_failed" },
+        if has_patch { "none" } else { "no_valid_block" },
+        ctx.mission.id,
+        ctx.mission.project_id,
+        extract.files.as_ref().map(|f| f.len()).unwrap_or(0),
+    );
+    let _ = step_id; // suprime warning de unused em builds release
+    Some(PatchCompilerResult {
+        files: extract.files,
+        title: extract.title,
+        summary: extract.summary,
+        raw_output: truncated,
+        status: if has_patch {
+            PatchCompilerStatus::Compiled
+        } else {
+            PatchCompilerStatus::ParseFailed
+        },
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline de agentes para missões (PR 011 — Fase 7)
 // ---------------------------------------------------------------------------
 
@@ -1301,70 +1458,67 @@ pub fn run_mission_agents(
                         let mut extract = missions::extract_fluxora_patch_block(&final_truncated);
                         let mut has_patch = extract.files.as_ref().map(|f| !f.is_empty()).unwrap_or(false) && extract.title.is_some();
 
-                        if !has_patch && missions::has_creation_request(ctx.user_prompt) {
+                        let intent_requires_patch =
+                            missions::intent_requires_patch(ctx.user_prompt);
+                        eprintln!(
+                            "[Fluxora Patch Compiler] intentRequiresPatch={} developerHasPatch={} missionId={} projectId={}",
+                            intent_requires_patch,
+                            has_patch,
+                            ctx.mission.id,
+                            ctx.mission.project_id,
+                        );
+
+                        // Se o Developer não gerou patch válido E a
+                        // missão exige patch, aciona o Patch Compiler
+                        // (etapa obrigatória). Patch Compiler é uma
+                        // chamada dedicada a provider com prompt
+                        // estrito que exige SOMENTE o bloco
+                        // `fluxora_patch` como saída.
+                        if !has_patch && intent_requires_patch {
                             emit_agent_event(
                                 app,
                                 "agent/step-chunk",
                                 "info",
-                                "O Developer não retornou um bloco fluxora_patch válido. Tentando correção automática...",
+                                "Developer não retornou fluxora_patch. Acionando Patch Compiler...",
                                 Some(ctx.mission.project_id.clone()),
                                 Some(ctx.mission.id.clone()),
                                 Some(agent.id.clone()),
                                 None,
                             );
 
-                            let mut retry_messages = messages.clone();
-                            retry_messages.push(providers::ChatMessagePayload {
-                                role: "assistant".to_string(),
-                                content: final_truncated.clone(),
-                            });
-                            retry_messages.push(providers::ChatMessagePayload {
-                                role: "user".to_string(),
-                                content: "A resposta anterior não contém um bloco fluxora_patch válido.\n\
-Converta sua solução em um bloco fluxora_patch válido agora.\n\
-Retorne somente o bloco fluxora_patch.".to_string(),
-                            });
-
-                            let retry_result = execute_provider_chat_for_agent(
+                            let compiler_result = run_patch_compiler(
                                 app,
+                                ctx,
+                                &final_truncated,
+                                planner_summary.as_deref(),
                                 &step_id,
-                                &ctx.mission.id,
-                                &ctx.mission.project_id,
-                                &agent.id,
-                                &agent.name,
-                                &agent.role,
-                                provider_id,
-                                model,
-                                &retry_messages,
-                                Some(2048),
                             );
 
-                            match retry_result {
-                                Ok(chat) => {
-                                    let retry_truncated = truncate_output(&chat.text);
-                                    let retry_summary = summarize_text(&retry_truncated, 280);
-                                    let retry_extract = missions::extract_fluxora_patch_block(&retry_truncated);
-                                    let retry_has_patch = retry_extract.files.as_ref().map(|f| !f.is_empty()).unwrap_or(false) && retry_extract.title.is_some();
-                                    
-                                    if retry_has_patch {
-                                        final_truncated = retry_truncated;
-                                        final_output_summary = retry_summary;
-                                        extract = retry_extract;
-                                        has_patch = true;
+                            if let Some(compiler) = compiler_result {
+                                if compiler.status == PatchCompilerStatus::Compiled {
+                                    if let Some(files) = compiler.files {
+                                        if !files.is_empty() {
+                                            final_truncated = compiler.raw_output.clone();
+                                            final_output_summary = summarize_text(&final_truncated, 280);
+                                            extract = missions::FluxoraPatchExtract {
+                                                cleaned_text: compiler.raw_output.clone(),
+                                                raw_json: None,
+                                                files: Some(files),
+                                                title: compiler.title.clone(),
+                                                summary: compiler.summary.clone(),
+                                            };
+                                            has_patch = true;
 
-                                        // Atualiza o step com o novo texto de sucesso da retry
-                                        let state = app.state::<AgentsState>();
-                                        let _ = update_step(&state, &step_id, |s| {
-                                            s.output_text = Some(final_truncated.clone());
-                                            s.output_summary = Some(final_output_summary.clone());
-                                        });
-                                        let _ = persist_agent_steps(app);
-                                    } else {
-                                        eprintln!("[fluxora agents] segunda tentativa não retornou patch válido.");
+                                            // Atualiza o step com o
+                                            // output do Compiler.
+                                            let state = app.state::<AgentsState>();
+                                            let _ = update_step(&state, &step_id, |s| {
+                                                s.output_text = Some(final_truncated.clone());
+                                                s.output_summary = Some(final_output_summary.clone());
+                                            });
+                                            let _ = persist_agent_steps(app);
+                                        }
                                     }
-                                }
-                                Err(err) => {
-                                    eprintln!("[fluxora agents] erro na chamada de segunda tentativa: {err}");
                                 }
                             }
                         }
@@ -1383,6 +1537,11 @@ Retorne somente o bloco fluxora_patch.".to_string(),
                                 ctx.mission.project_id,
                                 files.len(),
                                 title
+                            );
+                            eprintln!(
+                                "[Fluxora Patch Compiler] proposalId=pending proposalStatus=draft filesCount={} missionId={}",
+                                files.len(),
+                                ctx.mission.id,
                             );
                             match crate::patches::create_proposal_from_provider_text(
                                 app,
@@ -1426,6 +1585,14 @@ Retorne somente o bloco fluxora_patch.".to_string(),
                                         },
                                     );
                                     let _ = persist_agent_steps(app);
+                                    eprintln!(
+                                        "[Fluxora Patch Compiler] proposalId={} proposalStatus={} filesCount={} missionId={} projectId={}",
+                                        proposal.id,
+                                        proposal.status,
+                                        proposal.files.len(),
+                                        ctx.mission.id,
+                                        ctx.mission.project_id,
+                                    );
                                 }
                                 Err(error) => {
                                     eprintln!(

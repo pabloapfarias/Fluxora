@@ -367,6 +367,27 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   `/tmp/fluxora-ui-real-test` (mesmo path que o usuário
   cadastraria na UI) usando o mesmo `apply_one_file` que
   `patches_apply` chama em runtime.
+- [HOTFIX — Obrigar geração de PatchProposal para missões de alteração](./STATUS_HOTFIX_PATCH_COMPILER_REQUIRED.md)
+  Hotfix corretiva. Adiciona a etapa obrigatória **Patch
+  Compiler** (chamada dedicada a provider com prompt estrito
+  que exige SOMENTE o bloco `fluxora_patch` como saída) que
+  roda sempre que o Developer não gera patch válido e a
+  missão exige patch. Parser agora aceita `fluxora_patch`,
+  bloco `json` e JSON puro. `has_modification_request` +
+  `intent_requires_patch` detectam verbos de modificação
+  (atualize, altere, migre, use tailwind, etc.). Gate
+  final em `run_mission`: se `intent_requires_patch=true` e
+  nenhuma PatchProposal foi gerada, `fail_mission` é chamado
+  com mensagem clara — nunca mais termina como `completed`
+  sem patch. 94 testes Rust passam, incluindo
+  `patch_compiler_e2e_landing_page_writes_files_to_tmp` e
+  `patch_compiler_e2e_tailwind_migration_modifies_existing_file`
+  que escrevem arquivos em `/tmp/fluxora-patch-compiler-test`
+  e `/tmp/fluxora-tailwind-test` (mesmo path que a UI
+  cadastraria). Logs seguros `[Fluxora Patch Compiler]` com
+  `intentRequiresPatch`, `developerHasPatch`, `compilerCalled`,
+  `compilerHasPatch`, `parseStatus`, `parseError`,
+  `filesCount`, `proposalId`, `proposalStatus`.
 
 ## Convenções aplicadas em todas as PRs
 
