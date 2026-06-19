@@ -326,6 +326,12 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   (Planner, Developer, QA, Finalizer), prevenindo sobreposição de texto ou horário,
   truncando outputs extensos em no máximo 3 linhas e implementando navegação com scroll
   suave para detalhamento completo na aba Agentes ao selecionar qualquer card.
+- [PR 015 — Corrigir criação real de arquivos via patch aplicado](./STATUS_MIGRATION_TAURI_PR_015_REAL_FILE_CREATION_PATCH.md)
+  Corrige a materialização de arquivos criados/modificados por missões reais assistidas
+  no FluxoraV1. O prompt do Developer e a montagem de mensagens foram estendidos com o
+  esquema JSON do bloco `fluxora_patch`. O Mission Engine falha caso missões de criação
+  não gerem patches, e a UI do desktopBridge foi ajustada para filtrar aprovações por missionId.
+  Adiciona testes unitários para o parser de patches e gravação segura local no filesystem.
 
 ## Convenções aplicadas em todas as PRs
 
