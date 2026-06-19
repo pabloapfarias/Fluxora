@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
@@ -42,6 +42,74 @@ import { normalizeLogText } from "../lib/logFormatting";
 
 type DetailTab = "resumo" | "agentes" | "logs" | "resultado" | "arquivos" | "aprovacao" | "erros";
 
+/**
+ * HOTFIX — Estado unificado da tela de missão.
+ *
+ * Cada aba (Resumo, Agentes, Logs, Resultado, Arquivos, Aprovação,
+ * Erros) lê desta estrutura única, em vez de buscar sua própria
+ * verdade em momentos diferentes. A função `loadMissionDetail`
+ * é a única que materializa esse estado, e é re-acionada em
+ * qualquer evento relevante do barramento `fluxora-event`
+ * (`mission/*`, `agent/*`, `patch/*`, `approval/*`,
+ * `provider/*`). Um polling leve (5s) atua como fallback para
+ * casos em que o evento não chega (ex.: restart do app).
+ */
+type ChangedFileLite = {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+};
+
+type MissionDetailState = {
+  detail: WorkflowRunDetail | null;
+  outputs: AgentStepOutput[];
+  job: BackgroundWorkflowJob | null;
+  approval: Approval | null;
+  proposals: PatchProposal[];
+  commits: GitCommitResult[];
+  changedFiles: ChangedFileLite[];
+  errorsCount: number;
+  loading: boolean;
+  lastFetchAt: number | null;
+};
+
+const EMPTY_DETAIL_STATE: MissionDetailState = {
+  detail: null,
+  outputs: [],
+  job: null,
+  approval: null,
+  proposals: [],
+  commits: [],
+  changedFiles: [],
+  errorsCount: 0,
+  loading: false,
+  lastFetchAt: null,
+};
+
+/**
+ * Log temporário seguro do estado unificado da missão. Não
+ * inclui API key nem conteúdo de arquivos — apenas
+ * identificadores e contadores, úteis para a fase 13 da hotfix.
+ */
+function logMissionDetailSnapshot(workflowId: string, state: MissionDetailState) {
+  try {
+    console.info("[Fluxora Mission Detail]", {
+      missionId: workflowId,
+      status: state.detail?.status,
+      currentPhase: state.detail?.currentStepId,
+      stepsCount: state.outputs.length,
+      eventsCount: state.detail?.events?.length ?? 0,
+      patchesCount: state.proposals.length,
+      changedFilesCount: state.changedFiles.length,
+      approvalsCount: state.approval ? 1 : 0,
+      errorsCount: state.errorsCount,
+    });
+  } catch {
+    // noop
+  }
+}
+
 export function ExecutionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -51,18 +119,20 @@ export function ExecutionDetailPage() {
   const initialTab = (searchParams.get("tab") as DetailTab) || "resumo";
   const initialStepId = searchParams.get("step");
 
-  const [detail, setDetail] = useState<WorkflowRunDetail | null>(null);
-  const [outputs, setOutputs] = useState<AgentStepOutput[]>([]);
-  const [job, setJob] = useState<BackgroundWorkflowJob | null>(null);
+  // HOTFIX — Estado unificado. Substitui os 6 useState
+  // anteriores (detail/outputs/job/approval/proposals/commits)
+  // para garantir que cada aba veja a mesma versão do estado
+  // da missão.
+  const [state, setState] = useState<MissionDetailState>(EMPTY_DETAIL_STATE);
   const [tab, setTab] = useState<DetailTab>(initialTab);
   const [selectedAgentStepId, setSelectedAgentStepId] = useState<string | null>(initialStepId);
-  const [approval, setApproval] = useState<Approval | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [approvalActionLoading, setApprovalActionLoading] = useState<"approve" | "reject" | null>(null);
   const [rerunModalOpen, setRerunModalOpen] = useState(false);
-  const [proposals, setProposals] = useState<PatchProposal[]>([]);
-  const [commits, setCommits] = useState<GitCommitResult[]>([]);
   const [commitModalOpen, setCommitModalOpen] = useState(false);
+
+  // Detalhes derivados (memória) para evitar recomputações.
+  const { detail, outputs, job, approval, proposals, commits, changedFiles } = state;
 
   useEffect(() => {
     const qTab = searchParams.get("tab") as DetailTab;
@@ -70,6 +140,100 @@ export function ExecutionDetailPage() {
     if (qTab) setTab(qTab);
     if (qStep) setSelectedAgentStepId(qStep);
   }, [searchParams]);
+
+  /**
+   * HOTFIX — Carrega o estado unificado da missão.
+   * Substitui o antigo `loadDetail` que buscava cada fatia
+   * (workflows.get, listAgentOutputs, approvals.list,
+   * patches.listByMission, git.listMissionCommits) e atribuía
+   * cada uma a um useState separado, sem coordenação. Agora
+   * cada carregamento é atômico: ou atualiza o estado inteiro,
+   * ou não atualiza.
+   */
+  const loadMissionDetail = useCallback(async (workflowId: string) => {
+    setState((prev) => ({ ...prev, loading: true }));
+    try {
+      const [d, agentOutputs, jobs, approvals, props, comms, files] = await Promise.all([
+        window.fluxora.workflows.get(workflowId),
+        window.fluxora.workflows.listAgentOutputs(workflowId),
+        window.fluxora.workflows.listJobs().catch(() => [] as BackgroundWorkflowJob[]),
+        window.fluxora.approvals.list().catch(() => [] as Approval[]),
+        window.fluxora.patches?.listByMission
+          ? window.fluxora.patches.listByMission(workflowId).catch(() => [] as PatchProposal[])
+          : Promise.resolve([] as PatchProposal[]),
+        window.fluxora.git?.listMissionCommits
+          ? window.fluxora.git.listMissionCommits(workflowId).catch(() => [] as GitCommitResult[])
+          : Promise.resolve([] as GitCommitResult[]),
+        window.fluxora.git.changedFiles(workflowId).catch(() => [] as ChangedFileLite[]),
+      ]);
+      const activeJob =
+        jobs.find(
+          (entry) =>
+            entry.workflowRunId === workflowId &&
+            ["queued", "running"].includes(entry.status)
+        ) || null;
+      const foundApproval = d.finalApprovalId
+        ? approvals.find((a) => a.id === d.finalApprovalId)
+        : approvals.find((a) => a.workflowRunId === workflowId) || null;
+      const errCount = (d.events ?? []).filter(
+        (e) =>
+          e.type.includes("failed") ||
+          e.type.includes("error") ||
+          e.type.includes("ERRO") ||
+          e.type === "workflow.failed" ||
+          e.type === "workflow.real.failed" ||
+          e.type === "workflow.multi_agent.failed" ||
+          e.type === "patch/apply-failed" ||
+          e.type === "approval/rejected"
+      ).length;
+      const next: MissionDetailState = {
+        detail: d,
+        outputs: agentOutputs,
+        job: activeJob,
+        approval: foundApproval ?? null,
+        proposals: props,
+        commits: comms,
+        changedFiles: files,
+        errorsCount: errCount,
+        loading: false,
+        lastFetchAt: Date.now(),
+      };
+      setState(next);
+      logMissionDetailSnapshot(workflowId, next);
+    } catch (error) {
+      // HOTFIX — Falha de carga: registrar no console sem
+      // alterar os outros campos (mantém o estado anterior
+      // visível para o usuário).
+      console.warn("[Fluxora Mission Detail] loadMissionDetail falhou", {
+        missionId: workflowId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      setState((prev) => ({ ...prev, loading: false, lastFetchAt: Date.now() }));
+    }
+  }, []);
+
+  // HOTFIX — Carregamento inicial + sincronização por evento.
+  // O barramento `fluxora-event` é a fonte primária de refresh;
+  // o polling de 5s é fallback para misses de evento.
+  useEffect(() => {
+    if (!id) return;
+    loadMissionDetail(id);
+    const interval = setInterval(() => {
+      if (id) loadMissionDetail(id);
+    }, 5000);
+    const unsubscribe = window.fluxora.events.subscribe((event) => {
+      if (!shouldRefreshOn(event)) return;
+      if (event.missionId && event.missionId !== id) return;
+      // Quando o evento não tem missionId (ex.: patch/proposal-created
+      // com projectId apenas), ainda recarregamos se o id for o
+      // afetado — o backend filtra pelo missionId no estado.
+      if (id) loadMissionDetail(id);
+    });
+    return () => {
+      clearInterval(interval);
+      unsubscribe();
+    };
+  }, [id, loadMissionDetail]);
 
   const isControlledExecution = useMemo(() => {
     if (!detail?.generatedContext) return false;
@@ -99,98 +263,25 @@ export function ExecutionDetailPage() {
         e.type.includes("ERRO") ||
         e.type === "workflow.failed" ||
         e.type === "workflow.real.failed" ||
-        e.type === "workflow.multi_agent.failed"
+        e.type === "workflow.multi_agent.failed" ||
+        e.type === "patch/apply-failed" ||
+        e.type === "approval/rejected"
     );
   }, [detail?.events]);
 
-  // Extrair resultado da missão
+  // Extrair resultado da missão — derivado do `resultText` real
+  // (PR 008/011 gravam em `MissionRun.resultText`), com fallback
+  // para `mission.result` nos eventos.
   const missionResult = useMemo(() => {
     if (!detail?.events) return null;
     const resultEvents = detail.events.filter((e) => e.type === "mission.result");
     return resultEvents.length > 0 ? resultEvents[resultEvents.length - 1].message : null;
   }, [detail?.events]);
 
-  // Contar erros para badge
-  const errorCount = errorEvents.length;
-
-  useEffect(() => {
-    if (id) loadDetail(id);
-    const interval = setInterval(() => {
-      if (id) loadDetail(id);
-    }, 2000);
-    const unsubscribeEvents = window.fluxora.events.onWorkflowEvent((event) => {
-      if (event.workflowRunId !== id) return;
-      setDetail((current) =>
-        current ? { ...current, events: appendEvent(current.events, event) } : current
-      );
-    });
-    const unsubscribeJobs = window.fluxora.events.onJobUpdated((nextJob) => {
-      if (nextJob.workflowRunId === id) setJob(nextJob);
-    });
-    const unsubscribeBus = window.fluxora.events.subscribe((event) => {
-      const mapped = mapFluxoraEventToWorkflowEvent(event);
-      if (!mapped || mapped.workflowRunId !== id) return;
-      setDetail((current) =>
-        current ? { ...current, events: appendEvent(current.events, mapped) } : current
-      );
-    });
-    const unsubscribeApproval = window.fluxora.events.onApprovalChange((updated) => {
-      if (updated.workflowRunId !== id) return;
-      setApproval(updated);
-    });
-    return () => {
-      clearInterval(interval);
-      unsubscribeEvents();
-      unsubscribeJobs();
-      unsubscribeBus();
-      unsubscribeApproval();
-    };
-  }, [id]);
-
-  async function loadDetail(workflowId: string) {
-    const [d, agentOutputs, jobs] = await Promise.all([
-      window.fluxora.workflows.get(workflowId),
-      window.fluxora.workflows.listAgentOutputs(workflowId),
-      window.fluxora.workflows.listJobs(),
-    ]);
-    setDetail(d);
-    setOutputs(agentOutputs);
-    setJob(
-      jobs.find(
-        (entry) =>
-          entry.workflowRunId === workflowId &&
-          ["queued", "running"].includes(entry.status)
-      ) || null
-    );
-
-    try {
-      const approvals = await window.fluxora.approvals.list();
-      const found = d.finalApprovalId
-        ? approvals.find((a) => a.id === d.finalApprovalId)
-        : approvals.find((a) => a.workflowRunId === workflowId);
-      if (found) setApproval(found);
-    } catch {
-      // noop
-    }
-
-    try {
-      if (window.fluxora.patches?.listByMission) {
-        const props = await window.fluxora.patches.listByMission(workflowId);
-        setProposals(props);
-      }
-    } catch (e) {
-      console.warn("Failed to load patches", e);
-    }
-
-    try {
-      if (window.fluxora.git?.listMissionCommits) {
-        const comms = await window.fluxora.git.listMissionCommits(workflowId);
-        setCommits(comms);
-      }
-    } catch (e) {
-      console.warn("Failed to load commits", e);
-    }
-  }
+  // Contar erros para badge — usa o contador já materializado
+  // em `MissionDetailState.errorsCount` para evitar divergência
+  // entre abas.
+  const errorCount = state.errorsCount;
 
   async function handleCancel() {
     if (!job) return;
@@ -209,9 +300,17 @@ export function ExecutionDetailPage() {
       const updated = approval.workflowRunId
         ? await window.fluxora.workflows.approveFinal(approval.workflowRunId)
         : await window.fluxora.approvals.approve(approval.id);
-      setApproval(updated);
+      setState((prev) => ({ ...prev, approval: updated }));
       setFeedback({ kind: "success", message: "Aprovação concedida com sucesso." });
-      if (id) await loadDetail(id);
+      // HOTFIX — Recarrega o estado unificado após aprovar.
+      // Quando o backend dispara `patches_apply` automaticamente
+      // (PR 010), os eventos `patch/apply-started` /
+      // `patch/file-applied` / `patch/apply-completed` ou
+      // `patch/apply-failed` farão a sincronização via
+      // barramento. Mesmo assim, forçamos uma recarga adicional
+      // para garantir que o `appliedProposal` / `changedFiles`
+      // apareçam sincronizados em todas as abas.
+      if (id) await loadMissionDetail(id);
     } catch (error) {
       setFeedback({
         kind: "error",
@@ -234,9 +333,9 @@ export function ExecutionDetailPage() {
       const updated = approval.workflowRunId
         ? await window.fluxora.workflows.rejectFinal(approval.workflowRunId)
         : await window.fluxora.approvals.reject(approval.id);
-      setApproval(updated);
+      setState((prev) => ({ ...prev, approval: updated }));
       setFeedback({ kind: "success", message: "Aprovação rejeitada." });
-      if (id) await loadDetail(id);
+      if (id) await loadMissionDetail(id);
     } catch (error) {
       setFeedback({
         kind: "error",
@@ -349,7 +448,10 @@ export function ExecutionDetailPage() {
           missionTitle={detail.title}
           onClose={() => setCommitModalOpen(false)}
           onSuccess={(result) => {
-            setCommits(prev => [...prev.filter(c => c.id !== result.id), result]);
+            setState((prev) => ({
+              ...prev,
+              commits: [...prev.commits.filter((c) => c.id !== result.id), result],
+            }));
           }}
         />
       )}
@@ -531,7 +633,7 @@ export function ExecutionDetailPage() {
 
         {/* ── Arquivos ── */}
         {tab === "arquivos" && (
-          <ChangedFilesSection workflowRunId={detail.id} />
+          <ChangedFilesSection workflowRunId={detail.id} files={changedFiles} />
         )}
 
         {/* ── Aprovação ── */}
@@ -639,24 +741,38 @@ function MissionResultSection({
 
 // ─── Changed Files Section ────────────────────────────────────────────
 
-function ChangedFilesSection({ workflowRunId }: { workflowRunId: string }) {
-  const [files, setFiles] = useState<Array<{ path: string; status: string; additions: number; deletions: number }>>([]);
+function ChangedFilesSection({
+  workflowRunId,
+  files: initialFiles,
+}: {
+  workflowRunId: string;
+  files?: ChangedFileLite[];
+}) {
+  const [files, setFiles] = useState<ChangedFileLite[]>(initialFiles ?? []);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [diffCache, setDiffCache] = useState<Record<string, string | null>>({});
   const [loadingDiff, setLoadingDiff] = useState<string | null>(null);
 
   useEffect(() => {
+    // HOTFIX — Recebe os arquivos via props (vem do estado
+    // unificado). Só faz fallback para `git.changedFiles`
+    // quando a prop não foi fornecida (caso edge em que o
+    // componente é montado fora do `ExecutionDetailPage`).
+    if (initialFiles !== undefined) {
+      setFiles(initialFiles);
+      return;
+    }
     let mounted = true;
     window.fluxora.git
       .changedFiles(workflowRunId)
       .then((f) => {
-        if (mounted) setFiles(f);
+        if (mounted) setFiles(f as ChangedFileLite[]);
       })
       .catch(() => {});
     return () => {
       mounted = false;
     };
-  }, [workflowRunId]);
+  }, [workflowRunId, initialFiles]);
 
   const expandFile = async (path: string) => {
     if (expanded === path) {
@@ -934,7 +1050,7 @@ function ApprovalSection({
         </div>
       )}
 
-      {/* Confirmação de arquivos (Fase 9) */}
+      {/* Confirmação de arquivos (Fase 14 — HOTFIX) */}
       {proposal && (
         <div className="space-y-3">
           {proposal.status === "applied" && (
@@ -942,11 +1058,24 @@ function ApprovalSection({
               <div className="text-[13px] font-semibold text-success mb-2">
                 Arquivos aplicados no projeto:
               </div>
+              {proposal.projectPath && (
+                <div className="text-[11px] text-text-muted mb-2 font-mono break-all">
+                  Caminho: {proposal.projectPath}
+                </div>
+              )}
               <ul className="space-y-1 font-mono text-[12px] text-text-primary">
-                {(proposal.filesWritten || proposal.files.map(f => f.path)).map((file) => (
+                {(proposal.filesWritten && proposal.filesWritten.length > 0
+                  ? proposal.filesWritten
+                  : proposal.files.map((f) => f.path)
+                ).map((file) => (
                   <li key={file}>- {file}</li>
                 ))}
               </ul>
+              {proposal.appliedAt && (
+                <div className="text-[10.5px] text-text-muted mt-2">
+                  Aplicado em: {new Date(proposal.appliedAt).toLocaleString("pt-BR")}
+                </div>
+              )}
             </div>
           )}
 
@@ -955,12 +1084,35 @@ function ApprovalSection({
               <div className="text-[13px] font-semibold text-error mb-2">
                 Falha ao aplicar arquivos:
               </div>
+              {proposal.error && (
+                <div className="text-[12px] text-text-secondary mb-2 font-mono break-all">
+                  {proposal.error}
+                </div>
+              )}
+              {proposal.projectPath && (
+                <div className="text-[11px] text-text-muted mb-2 font-mono break-all">
+                  Caminho: {proposal.projectPath}
+                </div>
+              )}
               <ul className="space-y-1 font-mono text-[12px] text-error">
                 {(proposal.filesMissing && proposal.filesMissing.length > 0
                   ? proposal.filesMissing
-                  : proposal.files.map(f => f.path)
+                  : proposal.files.map((f) => f.path)
                 ).map((file) => (
                   <li key={file}>- {file.endsWith("após escrita") ? file : `${file} não encontrado após escrita`}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {proposal.status === "pending_approval" && (
+            <div className="rounded-xl border border-warning/30 bg-warning-soft/20 p-5">
+              <div className="text-[13px] font-semibold text-warning mb-2">
+                Aguardando aprovação:
+              </div>
+              <ul className="space-y-1 font-mono text-[12px] text-text-secondary">
+                {proposal.files.map((f) => (
+                  <li key={f.path}>- {f.path}</li>
                 ))}
               </ul>
             </div>
@@ -1174,6 +1326,33 @@ function ErrorsSection({ errors }: { errors: WorkflowEvent[] }) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * HOTFIX — Define se um evento do barramento `fluxora-event`
+ * deve disparar um recarregamento do estado unificado da
+ * missão. Considera todos os namespaces que podem alterar o
+ * conteúdo das abas:
+ *
+ * - `mission/*`: mudanças de status, fase, completion, falha.
+ * - `agent/*`: steps de agentes (Planner, Developer, QA, Finalizer).
+ * - `patch/*`: criação, aprovação, apply, falha de patch.
+ * - `approval/*`: criação, aprovação, rejeição de aprovações.
+ * - `provider/*`: respostas de provider (podem completar steps).
+ *
+ * Outros namespaces (`project/*`, `voice/*`, `permission/*`)
+ * não disparam refresh porque não afetam diretamente o
+ * conteúdo da tela de missão.
+ */
+export function shouldRefreshOn(event: { type: string }): boolean {
+  const t = event.type || "";
+  return (
+    t.startsWith("mission/") ||
+    t.startsWith("agent/") ||
+    t.startsWith("patch/") ||
+    t.startsWith("approval/") ||
+    t.startsWith("provider/")
+  );
+}
 
 function appendEvent(events: WorkflowEvent[], event: WorkflowEvent) {
   if (events.some((entry) => entry.id === event.id)) return events;

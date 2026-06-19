@@ -1031,6 +1031,15 @@ async function listActionableApprovalsTauri(): Promise<ExecutionApproval[]> {
 }
 
 async function approveApprovalTauri(id: string): Promise<ExecutionApproval> {
+  // HOTFIX — Log temporário seguro do approve. Não inclui
+  // API key nem conteúdo de arquivos. Apenas identificadores.
+  try {
+    console.info("[Fluxora Disk Write] approval/approve requested", {
+      approvalId: id,
+    });
+  } catch {
+    // noop
+  }
   return await invoke<ExecutionApproval>("approvals_approve", { id });
 }
 
@@ -1283,7 +1292,42 @@ async function createPatchTauri(
 }
 
 async function applyPatchTauri(input: ApplyPatchInput): Promise<PatchProposal> {
-  return await invoke<PatchProposal>("patches_apply", { payload: input });
+  // HOTFIX — Log temporário seguro do apply. O backend
+  // devolve o `proposal` atualizado com `filesWritten`,
+  // `filesMissing` e `projectPath` (ver patches.rs::patches_apply).
+  // O backend já validou `path.exists()` para cada arquivo e
+  // emite `patch/apply-completed` apenas quando todos
+  // existem; `patch/apply-failed` caso contrário. Aqui só
+  // registramos identificadores (sem conteúdo dos arquivos).
+  try {
+    console.info("[Fluxora Disk Write] patches_apply requested", {
+      proposalId: input.proposalId,
+      approvalId: input.approvalId ?? null,
+    });
+  } catch {
+    // noop
+  }
+  const result = await invoke<PatchProposal>("patches_apply", {
+    payload: input,
+  });
+  try {
+    const written = (result as PatchProposal & {
+      filesWritten?: string[];
+      filesMissing?: string[];
+      projectPath?: string;
+    });
+    console.info("[Fluxora Disk Write] patches_apply completed", {
+      proposalId: result.id,
+      status: result.status,
+      filesWrittenCount: written.filesWritten?.length ?? 0,
+      filesMissingCount: written.filesMissing?.length ?? 0,
+      projectPath: written.projectPath ?? null,
+      appliedAt: result.appliedAt ?? null,
+    });
+  } catch {
+    // noop
+  }
+  return result;
 }
 
 async function rejectPatchTauri(

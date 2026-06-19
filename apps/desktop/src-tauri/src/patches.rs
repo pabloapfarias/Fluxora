@@ -2009,4 +2009,87 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&project_dir);
     }
+
+    // HOTFIX — PR do disk write: teste explícito de que um
+    // `create` de arquivo simples (`index.html`) em diretório
+    // temporário materializa o arquivo no disco, e que o
+    // `path.exists()` é `true` após a escrita.
+    #[test]
+    fn apply_one_file_creates_index_html_in_tmp_dir() {
+        let project_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test-project-index-html");
+        if project_dir.exists() {
+            let _ = std::fs::remove_dir_all(&project_dir);
+        }
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let file_change = PatchFileChangeRecord {
+            path: "index.html".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some(
+                "<!doctype html>\n<html><head><title>Test</title></head><body>Hello</body></html>\n"
+                    .to_string(),
+            ),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        };
+
+        let result = apply_one_file(&project_dir, &file_change);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+
+        let index_path = project_dir.join("index.html");
+        assert!(index_path.exists(), "index.html deve existir no disco após apply");
+        let content = std::fs::read_to_string(&index_path).unwrap();
+        assert!(content.contains("<title>Test</title>"));
+
+        let _ = std::fs::remove_dir_all(&project_dir);
+    }
+
+    // HOTFIX — Garante que `apply_one_file` cria subdiretórios
+    // intermediários automaticamente quando o `path` do arquivo
+    // tem segmentos que ainda não existem no disco.
+    #[test]
+    fn apply_one_file_creates_intermediate_subdirectories() {
+        let project_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test-project-subdir-create");
+        if project_dir.exists() {
+            let _ = std::fs::remove_dir_all(&project_dir);
+        }
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let file_change = PatchFileChangeRecord {
+            path: "deep/nested/path/script.js".to_string(),
+            operation: "create".to_string(),
+            before_content: None,
+            after_content: Some("console.log('ok');\n".to_string()),
+            unified_diff: None,
+            additions: None,
+            deletions: None,
+            is_new_file: None,
+            is_deleted_file: None,
+        };
+
+        let result = apply_one_file(&project_dir, &file_change);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+
+        let final_path = project_dir
+            .join("deep")
+            .join("nested")
+            .join("path")
+            .join("script.js");
+        assert!(
+            final_path.exists(),
+            "script.js deve existir no subdiretório criado automaticamente"
+        );
+
+        let _ = std::fs::remove_dir_all(&project_dir);
+    }
 }

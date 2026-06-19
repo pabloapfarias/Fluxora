@@ -336,6 +336,18 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   Adiciona suporte a Git local controlado após aplicação de patch, permitindo que o
   usuário crie branch e commit locais contendo unicamente as modificações aplicadas
   pela PatchProposal da missão, integrando aprovações/permissões e logs de commits no app.
+- [HOTFIX — Escrita real em disco e sincronização da tela de missão](./STATUS_HOTFIX_REAL_DISK_WRITE_AND_MISSION_SYNC.md)
+  Hotfix corretiva. Consolida a `ExecutionDetailPage` em uma única fonte
+  de verdade (`MissionDetailState`) sincronizada pelo barramento
+  `fluxora-event`, com fallback de polling a 5s. Reforça a UI de
+  confirmação pós-apply (`applied` / `failed` / `pending_approval` com
+  `projectPath` e `appliedAt`). Adiciona logs temporários seguros
+  `[Fluxora Disk Write]` e `[Fluxora Mission Detail]` no
+  `desktopBridge.ts`. Adiciona 2 testes Rust em `patches.rs`
+  (`apply_one_file_creates_index_html_in_tmp_dir` e
+  `apply_one_file_creates_intermediate_subdirectories`). Nenhuma
+  alteração de fluxo backend, nenhuma feature nova, nenhum Git commit
+  de projeto gerado, nenhum push para `main`.
 
 ## Convenções aplicadas em todas as PRs
 
