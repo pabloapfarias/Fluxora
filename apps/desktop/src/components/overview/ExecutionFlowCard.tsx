@@ -349,14 +349,16 @@ export function ExecutionFlowCard({
     return (
       <MissionCard variant="default" padding="sm" className="overflow-hidden">
         <div className="px-5 py-3.5 border-b border-border-subtle">
-          <SectionHeader title="Fluxo de Execução" />
+          <SectionHeader title="Fluxo de Execução (Real)" />
         </div>
         <div className="p-5 text-center py-8">
           <div className="w-12 h-12 mx-auto rounded-full bg-bg-elevated border border-border-subtle flex items-center justify-center mb-3">
             <Rocket size={20} className="text-text-muted" />
           </div>
-          <div className="text-[13px] text-text-secondary">Nenhuma execução ativa</div>
-          <div className="text-[11.5px] text-text-muted mt-1">Envie uma missão para ver o fluxo</div>
+          <div className="text-[13px] font-semibold text-text-primary">Nenhuma missão em execução.</div>
+          <div className="text-[11.5px] text-text-muted mt-1.5 max-w-[420px] mx-auto leading-relaxed">
+            Envie uma missão para acompanhar Planner, Developer, QA e Finalizer em tempo real.
+          </div>
         </div>
       </MissionCard>
     );

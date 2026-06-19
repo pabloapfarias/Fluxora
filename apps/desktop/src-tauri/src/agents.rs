@@ -1375,6 +1375,15 @@ Retorne somente o bloco fluxora_patch.".to_string(),
                         if has_patch {
                             let files = extract.files.unwrap();
                             let title = extract.title.unwrap();
+                            // HOTFIX UI E2E — Log seguro da
+                            // detecção de patch no Developer.
+                            eprintln!(
+                                "[Fluxora E2E Disk] developer_has_patch missionId={} projectId={} filesCount={} title={}",
+                                ctx.mission.id,
+                                ctx.mission.project_id,
+                                files.len(),
+                                title
+                            );
                             match crate::patches::create_proposal_from_provider_text(
                                 app,
                                 ctx.mission,

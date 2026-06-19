@@ -38,6 +38,7 @@ import type {
   MissionLog,
   MissionRun,
   MissionStatus,
+  MissionDetail,
   PatchProposal,
   PermissionAction,
   PermissionCheckResult,
@@ -710,7 +711,7 @@ const DEFAULT_AUDIO_RETENTION: AudioRetentionSettings = {
 // ---------------------------------------------------------------------------
 
 const MISSION_STATUS_TO_WORKFLOW: Record<MissionStatus, WorkflowRunStatus> = {
-  queued: "approved",
+  queued: "queued",
   running: "running",
   completed: "completed",
   failed: "failed",
@@ -737,6 +738,13 @@ function toWorkflowRun(mission: MissionRun): WorkflowRun {
       : undefined,
     executionMode: "real",
     realStrategy: "single",
+    // HOTFIX UI E2E — Propaga o resultado final consolidado
+    // gravado pelo Mission Engine em `MissionRun.resultText`.
+    // É a fonte canônica do que a aba "Resultado" da UI
+    // exibe — NUNCA deve cair em stream chunks, logs ou
+    // pedaços parciais do provider.
+    resultText: mission.resultText,
+    finalizerOutput: mission.resultText,
     createdAt: mission.createdAt,
     updatedAt: mission.updatedAt,
     completedAt: mission.completedAt,
@@ -959,6 +967,12 @@ function toLegacyApproval(input: ExecutionApproval): Approval {
     workflowRunId: input.missionId,
     createdAt: input.createdAt,
     resolvedAt: input.resolvedAt,
+    // HOTFIX UI E2E — Passa o `action` adiante para a UI
+    // conseguir distinguir o gate inicial (network-provider,
+    // read-files) da aprovação de apply-patch. Sem isso, a UI
+    // não tem como saber qual aprovação pode auto-aprovar e
+    // qual deve permanecer pendente para revisão do usuário.
+    action: input.action,
   };
 }
 
@@ -1165,6 +1179,23 @@ async function getMissionById(id: string): Promise<MissionRun | null> {
     return await invoke<MissionRun | null>("missions_get", { id });
   } catch (error) {
     console.warn("[desktopBridge] missions_get falhou", error);
+    return null;
+  }
+}
+
+/**
+ * HOTFIX UI E2E — Fonte única de verdade do detalhe da
+ * missão. Retorna a `MissionDetail` agregada (mission + steps
+ * + logs + patches + arquivos + aprovações + erros) numa única
+ * chamada. A `ExecutionDetailPage` usa este método como
+ * carregamento primário; cada aba lê do estado unificado.
+ */
+async function getMissionDetail(missionId: string): Promise<MissionDetail | null> {
+  if (!isTauriRuntime()) return null;
+  try {
+    return await invoke<MissionDetail | null>("missions_get_detail", { missionId });
+  } catch (error) {
+    console.warn("[desktopBridge] missions_get_detail falhou", error);
     return null;
   }
 }
@@ -1787,6 +1818,12 @@ export function createDesktopBridge(): FluxoraAPI {
           }
         }
         return mock.missions.get(missionId);
+      },
+      async getDetail(missionId: string): Promise<MissionDetail | null> {
+        if (isTauriRuntime()) {
+          return await getMissionDetail(missionId);
+        }
+        return null;
       },
       async create(input: CreateMissionInput): Promise<MissionRun> {
         if (isTauriRuntime()) {

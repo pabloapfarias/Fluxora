@@ -972,6 +972,7 @@ export function createMockAPI(): FluxoraAPI {
       ping: async () => new Date().toISOString(),
       list: async () => [],
       get: async (_id: string) => null,
+      getDetail: async (_id: string) => null,
       create: async (input: any) => ({
         id: `mock-mission-${Date.now()}`,
         projectId: input.projectId,

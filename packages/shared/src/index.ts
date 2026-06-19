@@ -627,6 +627,7 @@ function hasFallback(globalDefault?: GlobalDefaultAgentModel): boolean {
 
 // Workflow types
 export type WorkflowRunStatus =
+  | "queued"
   | "pending_approval"
   | "approved"
   | "running"
@@ -649,6 +650,22 @@ export interface WorkflowRun {
   executionMode?: WorkflowExecutionMode;
   realStrategy?: RealWorkflowStrategy;
   finalApprovalId?: string;
+  /**
+   * HOTFIX UI E2E — Resultado final consolidado da missão
+   * (output do Finalizer). É a fonte canônica do que a aba
+   * "Resultado" deve mostrar. NUNCA deve ser sobrescrito por
+   * chunks de stream, logs, eventos de fase ou pedaços parciais.
+   * Persistido no backend em `MissionRun.resultText` e propagado
+   * pela `desktopBridge.toWorkflowRun` em runtime Tauri.
+   */
+  resultText?: string;
+  /**
+   * HOTFIX UI E2E — Output bruto do agente Finalizer, mantido
+   * separado do `resultText` para diagnóstico. A UI usa
+   * `resultText` (com fallback explícito em `finalizerOutput`)
+   * — nunca usa stream chunks do provider.
+   */
+  finalizerOutput?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -745,6 +762,14 @@ export interface Approval {
   workflowRunId?: string;
   createdAt: string;
   resolvedAt?: string;
+  /**
+   * HOTFIX UI E2E — Categoria operacional da aprovação. Usado
+   * pela UI para distinguir o gate inicial (`network-provider`,
+   * `read-files`, etc.) da aprovação de `apply-patch`, que DEVE
+   * ser aprovada manualmente pelo usuário. Opcional para
+   * compatibilidade com aprovações legadas sem `action`.
+   */
+  action?: string;
 }
 
 // ─── Rastreabilidade (PR 008) ─────────────────────────────────────────
@@ -2089,6 +2114,60 @@ export interface MissionLog {
   payload?: unknown;
 }
 
+/**
+ * HOTFIX UI E2E — Visão consolidada e atômica de uma missão.
+ * É a fonte única de verdade retornada por
+ * `window.fluxora.missions.getDetail(runId)`. Cada aba da
+ * `ExecutionDetailPage` (Resumo, Agentes, Logs, Resultado,
+ * Arquivos, Aprovação, Erros) lê desta estrutura — NUNCA
+ * busca sua própria verdade em chamadas paralelas.
+ */
+export interface MissionDetail {
+  mission: MissionRun;
+  /** Steps reais persistidos pelo Agent Engine. */
+  steps: AgentStepRecord[];
+  /** Logs/eventos da missão. */
+  logs: MissionLog[];
+  /** Resultado final consolidado (espelha `mission.resultText`). */
+  resultText?: string;
+  /** Output bruto do Finalizer (atualmente idêntico a `resultText`). */
+  finalizerOutput?: string;
+  /** `PatchProposal` vinculadas. */
+  patches: PatchProposal[];
+  /** Arquivos alterados (das `PatchProposal` aplicadas). */
+  changedFiles: ChangedFileLite[];
+  /** Aprovações vinculadas à missão. */
+  approvals: ExecutionApproval[];
+  /** Erros materializados. */
+  errors: MissionErrorRecord[];
+  /** Status canônico (espelha `mission.status`). */
+  status: string;
+  /** Fase atual (espilha `mission.currentPhase`). */
+  currentPhase?: string;
+}
+
+/** Erro materializado de uma missão. */
+export interface MissionErrorRecord {
+  id: string;
+  missionId: string;
+  timestamp: string;
+  source: string;
+  message: string;
+  phase?: string;
+}
+
+/**
+ * Visão leve de um arquivo alterado, suficiente para o card
+ * "Arquivos" da tela de missão. Os campos mais ricos (diff,
+ * bytes exatos, etc.) são resolvidos sob demanda.
+ */
+export interface ChangedFileLite {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+}
+
 /** Input aceito por `missions_create` / `missions_create_and_run`. */
 export interface CreateMissionInput {
   projectId: string;
@@ -2465,6 +2544,14 @@ export interface FluxoraAPI {
     list(): Promise<MissionRun[]>;
     /** Retorna uma missão por `id` (ou `null` se não existir). */
     get(missionId: string): Promise<MissionRun | null>;
+    /**
+     * HOTFIX UI E2E — Fonte única de verdade para o detalhe
+     * da missão. Retorna `MissionDetail` agregada (mission +
+     * steps + logs + patches + arquivos + aprovações + erros)
+     * numa única chamada. É a base da `ExecutionDetailPage`
+     * para evitar drift entre abas.
+     */
+    getDetail(missionId: string): Promise<MissionDetail | null>;
     /** Cria uma missão (status inicial: "queued"). */
     create(input: CreateMissionInput): Promise<MissionRun>;
     /** Executa uma missão já criada. Atualiza o status persistido. */

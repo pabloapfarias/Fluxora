@@ -141,6 +141,16 @@ export function EventLog({ events, workflowRunId, activeTab, onTabChange, visibl
 
   const tab = activeTab || internalTab;
 
+  // HOTFIX UI E2E — Filtra eventos pelo `workflowRunId` quando
+  // ele é fornecido. Sem isso, o terminal da Central de Comando
+  // mostraria eventos de execuções antigas misturados com a
+  // execução atual (e com execuções que não têm `workflowRunId`
+  // no evento). Quando não há `workflowRunId` (nenhuma missão
+  // ativa), o terminal fica vazio.
+  const filteredEvents = workflowRunId
+    ? events.filter((event) => event.workflowRunId === workflowRunId)
+    : events.filter((event) => event.workflowRunId === undefined || event.workflowRunId === null || event.workflowRunId === "");
+
   useEffect(() => {
     if (activeTab) setInternalTab(activeTab);
   }, [activeTab]);
@@ -317,7 +327,7 @@ export function EventLog({ events, workflowRunId, activeTab, onTabChange, visibl
           aria-hidden={tab !== "timeline"}
           className={tab === "timeline" ? "block" : "hidden"}
         >
-          <TimelineView events={events} />
+          <TimelineView events={filteredEvents} />
         </div>
         <div
           role="tabpanel"
@@ -325,7 +335,7 @@ export function EventLog({ events, workflowRunId, activeTab, onTabChange, visibl
           aria-hidden={tab !== "logs"}
           className={tab === "logs" ? "block" : "hidden"}
         >
-          <LogsView events={events} />
+          <LogsView events={filteredEvents} />
         </div>
         <div
           role="tabpanel"
@@ -347,7 +357,7 @@ export function EventLog({ events, workflowRunId, activeTab, onTabChange, visibl
           aria-hidden={tab !== "comments"}
           className={tab === "comments" ? "block" : "hidden"}
         >
-          <CommentsView events={events} />
+          <CommentsView events={filteredEvents} />
         </div>
       </div>
     </div>

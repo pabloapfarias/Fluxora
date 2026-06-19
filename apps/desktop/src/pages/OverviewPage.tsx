@@ -204,12 +204,33 @@ export function OverviewPage() {
     const filteredApprovals = pid ? approvals.filter((a) => a.projectId === pid) : approvals;
     setAllApprovals(filteredApprovals);
 
+    // HOTFIX UI E2E — Estado inicial correto:
+    // - `activeRun` deve ser EXCLUSIVAMENTE uma execução em
+    //   estado ativo (`queued`, `running`, `pending_approval`).
+    // - Nunca usar `filteredRuns[0]` (que é a última execução,
+    //   geralmente `completed`) como fallback do active run.
+    // - Execuções concluídas aparecem em "Execuções Recentes" /
+    //   aba Histórico, não no fluxo ativo da Central de Comando.
     const selectedRun = selectedRunIdRef.current
       ? filteredRuns.find((run) => run.id === selectedRunIdRef.current)
       : null;
-    const running = filteredRuns.find((x) => x.status === "running" || x.status === "approved" || x.status === "pending_approval");
-    const nextActiveRun = selectedRun || running || filteredRuns[0] || null;
-    if (nextActiveRun) selectedRunIdRef.current = nextActiveRun.id;
+    const ACTIVE_RUN_STATUSES = ["queued", "running", "approved", "pending_approval"];
+    const isSelectedRunActive = selectedRun
+      ? ACTIVE_RUN_STATUSES.includes(selectedRun.status)
+      : false;
+    const running = filteredRuns.find((x) => ACTIVE_RUN_STATUSES.includes(x.status));
+    // Se o usuário clicou em uma execução específica e ela ainda
+    // está ativa, mantém. Caso contrário, o active run é a
+    // execução em curso ou pendente de aprovação. Nunca uma
+    // execução concluída.
+    const nextActiveRun = (isSelectedRunActive ? selectedRun : null) || running || null;
+    if (nextActiveRun) {
+      selectedRunIdRef.current = nextActiveRun.id;
+    } else {
+      // Limpa a referência para que na próxima carga o app não
+      // restaure uma execução antiga como ativa.
+      selectedRunIdRef.current = null;
+    }
     setActiveRun(nextActiveRun);
     setActiveJob(jobs.find((job) => nextActiveRun && job.workflowRunId === nextActiveRun.id && ["queued", "running"].includes(job.status)) || null);
 
@@ -399,8 +420,13 @@ export function OverviewPage() {
   };
 
   const handleRerunActive = async () => {
-    if (!activeRun?.id) return;
-    const result = await window.fluxora.workflows.rerun(activeRun.id, {});
+    // HOTFIX UI E2E — Usa a missão visível (ativa ou a
+    // última recente) para permitir o retry mesmo quando o
+    // active run foi limpo após `loadData` (toda missão
+    // concluída não é mais "active").
+    const target = activeRun || recentRuns[0];
+    if (!target?.id) return;
+    const result = await window.fluxora.workflows.rerun(target.id, {});
     selectedRunIdRef.current = result.workflowRunId;
     await loadData();
   };
@@ -564,14 +590,22 @@ export function OverviewPage() {
 
       // Execute based on mode
       if (executionMode === "real" || executionMode === "multi_agent") {
-        // Real/multi_agent: execute directly — auto-approve the initial gate
-        // so the real runner starts. The runner creates a contextual final
-        // approval only when files are actually changed.
+        // Real/multi_agent: execute directly. A missão já roda
+        // sincronamente em `createAndRunMissionInternal`; só
+        // auto-aprovamos aprovações que NÃO sejam `apply-patch`
+        // (gate inicial como `network-provider` / `read-files`).
+        // A aprovação de `apply-patch` SEMPRE precisa ser aprovada
+        // pelo usuário via UI, para que o fluxo da Fase 3 da
+        // HOTFIX UI E2E seja realmente exercitado pela UI.
         const pending = await window.fluxora.approvals.listPending();
-        const approval = pending.find((a) => a.workflowRunId === run.id);
-        if (approval) {
-          await window.fluxora.approvals.approve(approval.id);
+        const initialGate = pending.find(
+          (a) => a.workflowRunId === run.id && a.action !== "apply-patch"
+        );
+        if (initialGate) {
+          await window.fluxora.approvals.approve(initialGate.id);
         }
+        // Aplica-patch fica pendente para o usuário revisar e
+        // aprovar explicitamente pela UI.
         selectedRunIdRef.current = run.id;
         await loadData();
       } else {
@@ -647,13 +681,26 @@ export function OverviewPage() {
   }, [activeProject, executionMode, executeCommand]);
 
   // Compute result text for drawer
-  const missionResultEvents = events.filter(
-    (e) => e.type === "mission.result" && (!activeRun || e.workflowRunId === activeRun.id)
-  );
-  const latestMissionResult = missionResultEvents.length > 0 ? missionResultEvents[missionResultEvents.length - 1] : null;
-  const responseResults = opencodeResponses.filter((r) => !activeRun || r.workflowRunId === activeRun.id);
-  const latestResponse = responseResults.length > 0 ? responseResults[responseResults.length - 1] : null;
-  const resultTextForDrawer = latestMissionResult?.message || latestResponse?.text || null;
+  // HOTFIX UI E2E — O "resultado da missão" deve usar EXCLUSIVAMENTE
+  // o `resultText` (consolidado pelo Finalizer e persistido em
+  // `MissionRun.resultText`). Nunca caímos em stream chunks do
+  // provider — caso contrário, a UI mostraria o último pedaço
+  // parcial, e não a resposta consolidada.
+  // A fonte pode ser:
+  //   1. `activeRun.resultText` (canônico, vem do backend)
+  //   2. Evento `mission.result` (em cache durante a sessão)
+  //   3. `recentRuns[0].resultText` (fallback quando o active
+  //      já foi limpo por `loadData`).
+  const resultTargetRun = activeRun || resultDrawerRun || recentRuns[0] || null;
+  const resultMissionResultEvent = events
+    .filter((e) => e.type === "mission.result")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .pop();
+  const resultTextForDrawer =
+    resultTargetRun?.resultText ||
+    resultTargetRun?.finalizerOutput ||
+    resultMissionResultEvent?.message ||
+    null;
 
   return (
     <div className="space-y-6 max-w-[1800px]">
@@ -722,10 +769,10 @@ export function OverviewPage() {
       <MissionResultCompactCard
         responses={opencodeResponses}
         events={events}
-        activeRun={activeRun}
+        activeRun={activeRun || recentRuns[0] || null}
         onOpenDrawer={() => setShowResultDrawer(true)}
-        onOpenDetails={() => activeRun?.id && navigate(`/executions/${activeRun.id}`)}
-        onRerun={activeRun?.status === "failed" ? handleRerunActive : undefined}
+        onOpenDetails={() => (activeRun || recentRuns[0])?.id && navigate(`/executions/${(activeRun || recentRuns[0])!.id}`)}
+        onRerun={(activeRun || recentRuns[0])?.status === "failed" ? handleRerunActive : undefined}
       />
 
       {/* ─── Mission Terminal (EventLog) ─── */}
@@ -835,35 +882,43 @@ export function OverviewPage() {
   );
 }
 
-function MissionResultPanel({ responses, events, activeRun }: { responses: OpenCodeResponse[]; events: WorkflowEvent[]; activeRun: WorkflowRun | null }) {
-  // Find mission result from workflow events (primary source) or opencode responses (fallback)
-  const missionResultEvents = events.filter(
-    (e) => e.type === "mission.result" && (!activeRun || e.workflowRunId === activeRun.id)
-  );
+function MissionResultPanel({ responses: _responses, events, activeRun }: { responses: OpenCodeResponse[]; events: WorkflowEvent[]; activeRun: WorkflowRun | null }) {
+  // HOTFIX UI E2E — Fonte única: `resultText` do run + evento
+  // `mission.result` consolidado. NUNCA usa stream chunks do
+  // provider (causa raiz do bug que mostrava texto parcial,
+  // stream, logs ou pedaços como ", minim" no card "Resultado
+  // da Missão").
+  const missionResultEvents = events
+    .filter((e) => e.type === "mission.result")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const latestMissionResult = missionResultEvents.length > 0 ? missionResultEvents[missionResultEvents.length - 1] : null;
 
-  // Fallback: opencode responses
-  const responseResults = responses.filter((r) => !activeRun || r.workflowRunId === activeRun.id);
-  const latestResponse = responseResults.length > 0 ? responseResults[responseResults.length - 1] : null;
-
-  const resultText = latestMissionResult?.message || latestResponse?.text || null;
+  const resultText =
+    activeRun?.resultText ||
+    activeRun?.finalizerOutput ||
+    latestMissionResult?.message ||
+    null;
 
   // Check if the run completed with an error
   const isError = activeRun?.status === "failed";
+  const isRunning = activeRun?.status === "running" || activeRun?.status === "queued" || activeRun?.status === "approved" || activeRun?.status === "pending_approval";
 
-  if (!resultText && !isError) return null;
+  // HOTFIX UI E2E — Enquanto a missão está em curso e não há
+  // resultado consolidado, mostra "Aguardando conclusão da
+  // missão...". Se a missão falhou, mostra o erro.
+  if (!resultText && !isError && !isRunning) return null;
 
   return (
     <div className="flux-cockpit-card overflow-hidden">
       <div className="px-6 py-4 border-b border-border-subtle flex items-center gap-3">
         <div className={`w-8 h-8 rounded-lg border flex items-center justify-center ${
-          isError ? "bg-error-soft border-error/25" : "bg-success-soft border-success/25"
+          isError ? "bg-error-soft border-error/25" : isRunning ? "bg-accent-soft border-accent/25" : "bg-success-soft border-success/25"
         }`}>
-          <FileText size={15} className={isError ? "text-error" : "text-success"} />
+          <FileText size={15} className={isError ? "text-error" : isRunning ? "text-accent" : "text-success"} />
         </div>
         <div className="flex-1">
           <span className="flux-section-label">
-            {isError ? "Erro da missão" : "Resultado da missão"}
+            {isError ? "Erro da missão" : isRunning ? "Aguardando conclusão da missão..." : "Resultado da missão"}
           </span>
         </div>
       </div>
@@ -872,9 +927,13 @@ function MissionResultPanel({ responses, events, activeRun }: { responses: OpenC
           <div className="flux-body-text max-h-[500px] overflow-auto">
             <MarkdownRenderer content={resultText} />
           </div>
-        ) : (
+        ) : isError ? (
           <div className="text-[13px] text-error">
             A execução falhou. Verifique os logs para mais detalhes.
+          </div>
+        ) : (
+          <div className="text-[13px] text-text-muted text-center py-6">
+            Aguardando conclusão da missão...
           </div>
         )}
       </div>
@@ -889,7 +948,7 @@ function findControlledProject(projects: Project[]) {
 // ─── MissionResultCompactCard — card-resumo compacto do resultado ──────────
 
 function MissionResultCompactCard({
-  responses,
+  responses: _responses,
   events,
   activeRun,
   onOpenDrawer,
@@ -903,16 +962,24 @@ function MissionResultCompactCard({
   onOpenDetails?: () => void;
   onRerun?: () => void;
 }) {
-  const missionResultEvents = events.filter(
-    (e) => e.type === "mission.result" && (!activeRun || e.workflowRunId === activeRun.id)
-  );
+  // HOTFIX UI E2E — Fonte única: `resultText` do run + evento
+  // `mission.result` consolidado. Nunca usa stream chunks.
+  const missionResultEvents = events
+    .filter((e) => e.type === "mission.result")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const latestMissionResult = missionResultEvents.length > 0 ? missionResultEvents[missionResultEvents.length - 1] : null;
-  const responseResults = responses.filter((r) => !activeRun || r.workflowRunId === activeRun.id);
-  const latestResponse = responseResults.length > 0 ? responseResults[responseResults.length - 1] : null;
-  const resultText = latestMissionResult?.message || latestResponse?.text || null;
+  const resultText =
+    activeRun?.resultText ||
+    activeRun?.finalizerOutput ||
+    latestMissionResult?.message ||
+    null;
   const isError = activeRun?.status === "failed";
+  const isRunning = activeRun?.status === "running" || activeRun?.status === "queued" || activeRun?.status === "approved" || activeRun?.status === "pending_approval";
 
-  if (!resultText && !isError) return null;
+  // HOTFIX UI E2E — Só esconde quando não há run ativo e não há
+  // erro. Se a missão está rodando, mostra "Aguardando..." em
+  // vez de sumir da tela.
+  if (!activeRun && !isError && !resultText) return null;
 
   // Resumo: primeiras 3 linhas não vazias
   const summaryLines = resultText
@@ -932,13 +999,13 @@ function MissionResultCompactCard({
     <div className="flux-cockpit-card overflow-hidden">
       <div className="px-6 py-4 border-b border-border-subtle flex items-center gap-3">
         <div className={`w-8 h-8 rounded-lg border flex items-center justify-center ${
-          isError ? "bg-error-soft border-error/25" : "bg-success-soft border-success/25"
+          isError ? "bg-error-soft border-error/25" : isRunning ? "bg-accent-soft border-accent/25" : "bg-success-soft border-success/25"
         }`}>
-          <FileText size={15} className={isError ? "text-error" : "text-success"} />
+          <FileText size={15} className={isError ? "text-error" : isRunning ? "text-accent" : "text-success"} />
         </div>
         <div className="flex-1 min-w-0">
           <span className="flux-section-label">
-            {isError ? "Erro da missão" : "Resultado da missão"}
+            {isError ? "Erro da missão" : isRunning ? "Aguardando conclusão da missão..." : "Resultado da missão"}
           </span>
           {activeRun?.createdAt && (
             <span className="text-[11px] text-text-muted ml-3">
@@ -987,13 +1054,19 @@ function MissionResultCompactCard({
           )}
         </div>
       </div>
-      {summaryLines && (
+      {summaryLines ? (
         <div className="px-6 py-3">
           <div className="text-[12px] text-text-secondary line-clamp-3 leading-relaxed">
             <MarkdownRenderer content={summaryLines} />
           </div>
         </div>
-      )}
+      ) : isRunning ? (
+        <div className="px-6 py-3">
+          <div className="text-[12px] text-text-muted text-center">
+            Aguardando conclusão da missão...
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -280,6 +280,30 @@ fn find_approval(state: &ApprovalsState, id: &str) -> Option<ExecutionApprovalRe
         .and_then(|guard| guard.iter().find(|a| a.id == id).cloned())
 }
 
+/// HOTFIX UI E2E — Lista aprovações vinculadas a uma missão
+/// (mais recentes primeiro). Usado pelo
+/// `missions_get_detail` para alimentar a aba "Aprovação"
+/// da `ExecutionDetailPage` a partir de uma única fonte de
+/// verdade, em vez de a UI ter que listar todas as aprovações
+/// e filtrar no cliente.
+pub fn find_approvals_by_mission(
+    app: &AppHandle,
+    mission_id: &str,
+) -> Vec<ExecutionApprovalRecord> {
+    let state = app.state::<ApprovalsState>();
+    let guard = match state.approvals.lock() {
+        Ok(g) => g,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<ExecutionApprovalRecord> = guard
+        .iter()
+        .filter(|a| a.mission_id.as_deref() == Some(mission_id))
+        .cloned()
+        .collect();
+    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    out
+}
+
 fn update_approval<F>(
     state: &ApprovalsState,
     id: &str,
@@ -480,7 +504,25 @@ pub fn approvals_approve(
             .and_then(|p| p.get("proposalId"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // HOTFIX UI E2E — Log seguro do approval + intenção de
+        // apply. Não loga conteúdo.
+        eprintln!(
+            "[Fluxora E2E Disk] approval_approved action={} approvalId={} approvalStatus={} linkedProposalId={} missionId={} projectId={}",
+            updated.action,
+            updated.id,
+            updated.status,
+            linked_proposal_id.clone().unwrap_or_else(|| "none".to_string()),
+            updated.mission_id.clone().unwrap_or_else(|| "none".to_string()),
+            updated.project_id.clone().unwrap_or_else(|| "none".to_string())
+        );
         if let Some(proposal_id) = linked_proposal_id {
+            // HOTFIX UI E2E — Log do apply chamado a partir da
+            // aprovação.
+            eprintln!(
+                "[Fluxora E2E Disk] apply_called_by_approval proposalId={} approvalId={}",
+                proposal_id,
+                updated.id
+            );
             match crate::patches::patches_apply(
                 app.clone(),
                 proposal_id.clone(),

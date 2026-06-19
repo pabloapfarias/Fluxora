@@ -159,6 +159,59 @@ pub struct MissionLogRecord {
     pub payload: Option<serde_json::Value>,
 }
 
+/// HOTFIX UI E2E — Visão consolidada e atômica de uma missão.
+///
+/// É a fonte única de verdade que a `ExecutionDetailPage` (e
+/// futuras páginas de detalhe) consome. Cada aba (Resumo,
+/// Timeline, Logs, Resultado, Arquivos, Aprovação, Erros) lê
+/// desta estrutura, em vez de buscar sua própria verdade em
+/// chamadas paralelas. O backend agrega tudo numa única
+/// chamada, eliminando drift entre abas e reduzindo a
+/// dependência de polling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionDetailRecord {
+    pub mission: MissionRecord,
+    /// Steps reais persistidos pelo Agent Engine (Planner /
+    /// Developer / QA / Finalizer). Ordem de criação.
+    pub steps: Vec<agents::AgentStepRecord>,
+    /// Logs/eventos da missão (já derivados para `MissionLog`).
+    pub logs: Vec<MissionLogRecord>,
+    /// `resultText` consolidado (espelha `mission.resultText`
+    /// para a UI não precisar inspecionar o campo aninhado).
+    pub result_text: Option<String>,
+    /// Output bruto do agente Finalizer. Hoje idêntico a
+    /// `resultText`, mas mantido separado para diagnóstico
+    /// futuro.
+    pub finalizer_output: Option<String>,
+    /// `PatchProposal` vinculadas (todas as fases).
+    pub patches: Vec<patches::PatchProposalRecord>,
+    /// Arquivos alterados (vindos das `PatchProposal` aplicadas).
+    pub changed_files: Vec<serde_json::Value>,
+    /// Aprovações vinculadas à missão.
+    pub approvals: Vec<crate::approvals::ExecutionApprovalRecord>,
+    /// Erros materializados (eventos com `level: "error"` ou
+    /// tipo contendo `failed`).
+    pub errors: Vec<MissionErrorRecord>,
+    /// Status canônico da missão (espelha `mission.status`).
+    pub status: String,
+    /// Fase atual (espelha `mission.currentPhase`).
+    pub current_phase: Option<String>,
+}
+
+/// Erro materializado de uma missão (derivado de
+/// `MissionLog` ou do campo `error`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionErrorRecord {
+    pub id: String,
+    pub mission_id: String,
+    pub timestamp: String,
+    pub source: String,
+    pub message: String,
+    pub phase: Option<String>,
+}
+
 /// Estado em memória (carregado do disco no startup).
 pub struct MissionsState {
     pub missions: Mutex<Vec<MissionRecord>>,
@@ -979,6 +1032,82 @@ pub fn missions_get(app: AppHandle, id: String) -> Result<Option<MissionRecord>,
     Ok(find_mission(&state, &id))
 }
 
+/// HOTFIX UI E2E — Fonte única de verdade para o detalhe da
+/// missão. Agrega a `MissionRecord` com steps reais, logs,
+/// patches, arquivos alterados, aprovações e erros — tudo numa
+/// única chamada. É a base que `ExecutionDetailPage` consome
+/// para evitar drift entre abas.
+pub fn missions_get_detail(
+    app: AppHandle,
+    mission_id: String,
+) -> Result<Option<MissionDetailRecord>, String> {
+    let state = app.state::<MissionsState>();
+    let mission = match find_mission(&state, &mission_id) {
+        Some(m) => m,
+        None => return Ok(None),
+    };
+    let logs = missions_list_logs(app.clone(), mission_id.clone()).unwrap_or_default();
+    let steps = agents::find_steps_by_mission(&app.state::<agents::AgentsState>(), &mission_id);
+    let patches_state = app.state::<patches::PatchesState>();
+    let proposals = patches::find_proposals_by_mission(&patches_state, &mission_id);
+    let changed_files = match patches::patches_get_changed_files(app.clone(), mission_id.clone()) {
+        Ok(list) => list,
+        Err(error) => {
+            eprintln!(
+                "[Fluxora E2E Disk] missions_get_detail patches_get_changed_files falhou missionId={} error={}",
+                mission_id, error
+            );
+            Vec::new()
+        }
+    };
+    let approvals = crate::approvals::find_approvals_by_mission(&app, &mission_id);
+    let errors: Vec<MissionErrorRecord> = logs
+        .iter()
+        .filter(|log| {
+            log.level == "error"
+                || log.phase.as_deref() == Some("failed")
+                || log.phase.as_deref() == Some("patch-failed")
+                || log.phase.as_deref() == Some("policy-fallback")
+        })
+        .map(|log| MissionErrorRecord {
+            id: log.id.clone(),
+            mission_id: log.mission_id.clone(),
+            timestamp: log.timestamp.clone(),
+            source: log.phase.clone().unwrap_or_else(|| "mission".to_string()),
+            message: log.message.clone(),
+            phase: log.phase.clone(),
+        })
+        .collect();
+    let detail = MissionDetailRecord {
+        result_text: mission.result_text.clone(),
+        finalizer_output: mission.result_text.clone(),
+        status: mission.status.clone(),
+        current_phase: mission.current_phase.clone(),
+        mission,
+        steps,
+        logs,
+        patches: proposals,
+        changed_files,
+        approvals,
+        errors,
+    };
+    eprintln!(
+        "[Fluxora Result State] missionId={} status={} hasResultText={} resultLength={} finalizerOutputLength={} eventsCount={} stepsCount={} patchesCount={} approvalsCount={} changedFilesCount={} errorsCount={}",
+        detail.mission.id,
+        detail.status,
+        detail.result_text.is_some(),
+        detail.result_text.as_deref().map(|s| s.chars().count()).unwrap_or(0),
+        detail.finalizer_output.as_deref().map(|s| s.chars().count()).unwrap_or(0),
+        detail.logs.len(),
+        detail.steps.len(),
+        detail.patches.len(),
+        detail.approvals.len(),
+        detail.changed_files.len(),
+        detail.errors.len(),
+    );
+    Ok(Some(detail))
+}
+
 /// Cria uma missão (status inicial: "queued"). NÃO executa.
 pub fn missions_create(
     app: AppHandle,
@@ -1488,6 +1617,28 @@ pub fn missions_run(app: AppHandle, payload: RunMissionPayload) -> Result<Missio
         Some(serde_json::json!({
             "resultLength": final_text.chars().count(),
             "jobId": &job_id,
+        })),
+    );
+
+    // HOTFIX UI E2E — Emite um evento dedicado `mission/result`
+    // com o resultado final consolidado no campo `message`.
+    // A UI (aba "Resultado") usa EXCLUSIVAMENTE este evento
+    // (ou `MissionRun.resultText`) como fonte de verdade —
+    // nunca cai em chunks de stream, logs ou eventos de
+    // fase. O `message` é o output integral do Finalizer
+    // (já com o sumário do Developer/QA e a informação do
+    // patch aplicado, quando existir).
+    emit_mission_event(
+        &app,
+        "mission/result",
+        &completed.id,
+        Some(&completed.project_id),
+        "info",
+        &final_text,
+        Some("final-report"),
+        Some(serde_json::json!({
+            "resultLength": final_text.chars().count(),
+            "missionId": &completed.id,
         })),
     );
 

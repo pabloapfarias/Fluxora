@@ -73,6 +73,16 @@ export function RecentExecutions({ runs, pendingApprovals, onSelectRun, onViewRe
 
   if (runs.length === 0) return null;
 
+  // HOTFIX UI E2E — Identifica a primeira execução concluída
+  // (completed / failed / cancelled) na lista para rotular
+  // claramente como "Última execução concluída". Execuções em
+  // estado ativo (running / pending_approval) NÃO recebem esse
+  // rótulo — elas pertencem ao "Fluxo de Execução" ativo, não ao
+  // histórico.
+  const lastFinishedIndex = runs.findIndex(
+    (r) => r.status === "completed" || r.status === "failed" || r.status === "cancelled" || r.status === "rejected"
+  );
+
   return (
     <MissionCard className="overflow-hidden" padding="sm">
       <div className="px-6 py-4 border-b border-border-subtle">
@@ -89,7 +99,7 @@ export function RecentExecutions({ runs, pendingApprovals, onSelectRun, onViewRe
         />
       </div>
       <div className="divide-y divide-border-subtle">
-        {runs.map((run) => (
+        {runs.map((run, index) => (
           <div
             key={run.id}
             role="button"
@@ -101,37 +111,44 @@ export function RecentExecutions({ runs, pendingApprovals, onSelectRun, onViewRe
                 onSelectRun(run);
               }
             }}
-            className="no-drag w-full flex items-center gap-4 px-6 py-4 hover:bg-bg-elevated/40 transition-colors cursor-pointer group"
+            className="no-drag w-full flex flex-col gap-1.5 px-6 py-4 hover:bg-bg-elevated/40 transition-colors cursor-pointer group"
           >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2.5">
-                <span className="text-[14px] font-medium text-text-primary truncate group-hover:text-accent transition-colors">
-                  {formatExecutionTitle(run.title, run.executionMode)}
+            {index === lastFinishedIndex && (
+              <div className="text-[10.5px] uppercase tracking-wider font-semibold text-text-muted">
+                Última execução concluída
+              </div>
+            )}
+            <div className="w-full flex items-center gap-4">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-[14px] font-medium text-text-primary truncate group-hover:text-accent transition-colors">
+                    {formatExecutionTitle(run.title, run.executionMode)}
+                  </span>
+                </div>
+                <div className="text-[12px] text-text-muted truncate mt-1">
+                  {getSubtitle(run)}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 flex-shrink-0">
+                {run.executionMode && (() => {
+                  const badgeMode = mapMode(run.executionMode);
+                  return badgeMode ? <ModeBadge mode={badgeMode} size="sm" /> : null;
+                })()}
+
+                <StatusBadge status={mapStatus(run.status)} size="sm" />
+
+                <span className="text-[11px] text-text-muted tabular-nums w-[120px] text-right font-mono">
+                  {new Date(run.createdAt).toLocaleString("pt-BR", {
+                    day: "2-digit",
+                    month: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
                 </span>
+
+                {getPrimaryAction(run, pendingApprovals, navigate, onSelectRun, onViewResult)}
               </div>
-              <div className="text-[12px] text-text-muted truncate mt-1">
-                {getSubtitle(run)}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3 flex-shrink-0">
-              {run.executionMode && (() => {
-                const badgeMode = mapMode(run.executionMode);
-                return badgeMode ? <ModeBadge mode={badgeMode} size="sm" /> : null;
-              })()}
-
-              <StatusBadge status={mapStatus(run.status)} size="sm" />
-
-              <span className="text-[11px] text-text-muted tabular-nums w-[120px] text-right font-mono">
-                {new Date(run.createdAt).toLocaleString("pt-BR", {
-                  day: "2-digit",
-                  month: "2-digit",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </span>
-
-              {getPrimaryAction(run, pendingApprovals, navigate, onSelectRun, onViewResult)}
             </div>
           </div>
         ))}

@@ -18,12 +18,18 @@ import {
 } from "lucide-react";
 import type {
   AgentStepOutput,
+  AgentStepRecord,
   Approval,
   ApprovalContext,
   BackgroundWorkflowJob,
+  ExecutionApproval,
   FluxoraEvent,
+  MissionRun,
+  MissionLog,
   WorkflowEvent,
+  WorkflowRun,
   WorkflowRunDetail,
+  WorkflowRunStatus,
   WorkflowRerunInput,
   PatchProposal,
   GitCommitResult,
@@ -88,6 +94,169 @@ const EMPTY_DETAIL_STATE: MissionDetailState = {
 };
 
 /**
+ * HOTFIX UI E2E — Mapeia `MissionStatus` (canônico do
+ * backend) para `WorkflowRunStatus` (legado da UI). Garante
+ * que o status exibido na tela de detalhe seja coerente com o
+ * que o usuário viu na Central de Comando.
+ */
+function mapMissionStatusToWorkflow(status: string): WorkflowRunStatus {
+  switch (status) {
+    case "queued":
+      return "queued";
+    case "running":
+      return "running";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    default:
+      return "running";
+  }
+}
+
+/**
+ * HOTFIX UI E2E — Constrói um `WorkflowRunDetail` a partir
+ * do `MissionRun` agregado pelo `missions.getDetail`. Preserva
+ * a interface legada consumida pelas abas (Resultado, Resumo,
+ * etc.), expondo `resultText` e `finalizerOutput` no nível
+ * superior para que a aba "Resultado" leia diretamente.
+ */
+function buildWorkflowRunDetailFromMission(mission: MissionRun): WorkflowRunDetail {
+  const base: WorkflowRun = {
+    id: mission.id,
+    projectId: mission.projectId,
+    title: mission.title,
+    prompt: mission.prompt,
+    generatedContext: JSON.stringify(
+      {
+        kind: "mission-run",
+        mode: mission.mode,
+        providerId: mission.providerId,
+        model: mission.model,
+        currentPhase: mission.currentPhase,
+        error: mission.error,
+      },
+      null,
+      2,
+    ),
+    status: mapMissionStatusToWorkflow(mission.status),
+    currentStepId: mission.currentPhase ? `step-${mission.currentPhase}` : undefined,
+    executionMode: "real",
+    realStrategy: "single",
+    resultText: mission.resultText,
+    finalizerOutput: mission.resultText,
+    createdAt: mission.createdAt,
+    updatedAt: mission.updatedAt,
+    completedAt: mission.completedAt,
+  };
+  return {
+    ...base,
+    steps: [],
+    events: [],
+  } as WorkflowRunDetail;
+}
+
+/**
+ * HOTFIX UI E2E — Converte um `AgentStepRecord` (canônico
+ * do Agent Engine) em `AgentStepOutput` (legado da UI).
+ * Mantém o mapeamento de status já feito pelo
+ * `desktopBridge.toLegacyAgentStepOutput`.
+ */
+function toLegacyAgentStepOutputLocal(step: AgentStepRecord): AgentStepOutput {
+  const legacyStatus: AgentStepOutput["status"] =
+    step.status === "completed"
+      ? "completed"
+      : step.status === "failed"
+        ? "failed"
+        : step.status === "running" || step.status === "pending"
+          ? "running"
+          : "cancelled";
+
+  let friendlyName = step.agentName;
+  if (!friendlyName) {
+    switch (step.role) {
+      case "planner":
+        friendlyName = "Planner";
+        break;
+      case "developer":
+        friendlyName = "Developer";
+        break;
+      case "qa":
+        friendlyName = "QA";
+        break;
+      case "finalizer":
+        friendlyName = "Finalizer";
+        break;
+      default:
+        friendlyName = step.role;
+        break;
+    }
+  }
+
+  return {
+    id: step.id,
+    workflowRunId: step.missionId,
+    projectId: step.projectId,
+    stepId: step.agentId,
+    agentRole: step.role,
+    agentName: step.agentName,
+    name: friendlyName,
+    type: step.role as any,
+    prompt: step.inputSummary ?? "",
+    output: step.outputText ?? step.outputSummary ?? step.error ?? "",
+    parsedOutput: step.metadata ? JSON.stringify(step.metadata) : undefined,
+    status: legacyStatus,
+    startedAt: step.startedAt ?? step.createdAt,
+    completedAt: step.completedAt,
+  } as AgentStepOutput;
+}
+
+/**
+ * HOTFIX UI E2E — Converte `ExecutionApproval` (canônico
+ * novo) em `Approval` (legado da UI). Replica o
+ * `toLegacyApproval` do `desktopBridge` para uso local na
+ * página, evitando dependência circular.
+ */
+function toLegacyApprovalLocal(input: ExecutionApproval): Approval {
+  const impact: Approval["impact"] =
+    (input.risk as Approval["impact"]) ?? "medium";
+  const status: Approval["status"] =
+    input.status === "expired" || input.status === "cancelled"
+      ? "rejected"
+      : (input.status as Approval["status"]);
+  return {
+    id: input.id,
+    title: input.title,
+    description: input.description,
+    impact,
+    status,
+    projectId: input.projectId,
+    workflowRunId: input.missionId,
+    createdAt: input.createdAt,
+    resolvedAt: input.resolvedAt,
+    action: input.action,
+  } as Approval;
+}
+
+/**
+ * HOTFIX UI E2E — Converte `MissionLog` em `WorkflowEvent`
+ * para a aba Logs continuar exibindo os eventos da missão.
+ */
+function missionLogToWorkflowEvent(log: MissionLog): WorkflowEvent {
+  return {
+    id: log.id,
+    workflowRunId: log.missionId,
+    projectId: undefined,
+    type: log.phase ?? "log",
+    message: log.message,
+    metadata: log.payload !== undefined ? JSON.stringify(log.payload) : undefined,
+    createdAt: log.timestamp,
+  };
+}
+
+/**
  * Log temporário seguro do estado unificado da missão. Não
  * inclui API key nem conteúdo de arquivos — apenas
  * identificadores e contadores, úteis para a fase 13 da hotfix.
@@ -142,17 +311,82 @@ export function ExecutionDetailPage() {
   }, [searchParams]);
 
   /**
-   * HOTFIX — Carrega o estado unificado da missão.
-   * Substitui o antigo `loadDetail` que buscava cada fatia
-   * (workflows.get, listAgentOutputs, approvals.list,
-   * patches.listByMission, git.listMissionCommits) e atribuía
-   * cada uma a um useState separado, sem coordenação. Agora
-   * cada carregamento é atômico: ou atualiza o estado inteiro,
-   * ou não atualiza.
+   * HOTFIX UI E2E — Carrega o estado unificado da missão.
+   *
+   * Fonte primária: `window.fluxora.missions.getDetail(id)`,
+   * que devolve `MissionDetail` (mission + steps + logs +
+   * patches + arquivos + aprovações + erros) numa única
+   * chamada. Cada aba (Resumo, Agentes, Logs, Resultado,
+   * Arquivos, Aprovação, Erros) lê desta estrutura.
+   *
+   * Fallback: `workflows.get` + agregados paralelos, usado
+   * quando o bridge não está em runtime Tauri (smoke-test em
+   * browser) ou quando o `getDetail` falha.
    */
   const loadMissionDetail = useCallback(async (workflowId: string) => {
     setState((prev) => ({ ...prev, loading: true }));
     try {
+      const detailRecord = await window.fluxora.missions.getDetail(workflowId);
+      if (detailRecord) {
+        // Caminho canônico: MissionDetail agregado.
+        const jobs = await window.fluxora.workflows.listJobs().catch(() => [] as BackgroundWorkflowJob[]);
+        const comms = window.fluxora.git?.listMissionCommits
+          ? await window.fluxora.git.listMissionCommits(workflowId).catch(() => [] as GitCommitResult[])
+          : ([] as GitCommitResult[]);
+        const activeJob =
+          jobs.find(
+            (entry) =>
+              entry.workflowRunId === workflowId &&
+              ["queued", "running"].includes(entry.status)
+          ) || null;
+        const pendingExecution = detailRecord.approvals.find(
+          (a) => a.status === "pending",
+        );
+        const foundApproval = pendingExecution
+          ? toLegacyApprovalLocal(pendingExecution)
+          : detailRecord.approvals[0]
+            ? toLegacyApprovalLocal(detailRecord.approvals[0])
+            : null;
+        const baseDetail = buildWorkflowRunDetailFromMission(detailRecord.mission);
+        // Popula `events` (a partir dos logs) e `steps` (a
+        // partir dos steps reais) do WorkflowRunDetail para
+        // que a aba Logs/Timeline os veja.
+        baseDetail.events = detailRecord.logs.map((log) =>
+          missionLogToWorkflowEvent(log),
+        );
+        baseDetail.steps = detailRecord.steps.map((step) => {
+          const legacy = toLegacyAgentStepOutputLocal(step) as any;
+          return {
+            id: legacy.id,
+            workflowRunId: legacy.workflowRunId,
+            name: legacy.name || step.agentName,
+            type: legacy.type || "developer",
+            agentId: step.agentId,
+            status: legacy.status === "running" ? "running" : legacy.status === "failed" ? "failed" : "completed",
+            startedAt: legacy.startedAt,
+            completedAt: legacy.completedAt,
+            output: legacy.output,
+          };
+        });
+        const next: MissionDetailState = {
+          detail: baseDetail,
+          outputs: detailRecord.steps.map((step) =>
+            toLegacyAgentStepOutputLocal(step),
+          ),
+          job: activeJob,
+          approval: foundApproval,
+          proposals: detailRecord.patches,
+          commits: comms,
+          changedFiles: (detailRecord.changedFiles || []) as ChangedFileLite[],
+          errorsCount: detailRecord.errors.length,
+          loading: false,
+          lastFetchAt: Date.now(),
+        };
+        setState(next);
+        logMissionDetailSnapshot(workflowId, next);
+        return;
+      }
+      // Fallback (sem Tauri runtime ou `getDetail` indisponível).
       const [d, agentOutputs, jobs, approvals, props, comms, files] = await Promise.all([
         window.fluxora.workflows.get(workflowId),
         window.fluxora.workflows.listAgentOutputs(workflowId),
@@ -270,13 +504,19 @@ export function ExecutionDetailPage() {
   }, [detail?.events]);
 
   // Extrair resultado da missão — derivado do `resultText` real
-  // (PR 008/011 gravam em `MissionRun.resultText`), com fallback
-  // para `mission.result` nos eventos.
+  // (PR 008/011 gravam em `MissionRun.resultText` e a PR 016
+  // propaga via `desktopBridge.toWorkflowRun`), com fallback
+  // para o evento `mission.result` consolidado emitido no
+  // momento da conclusão.
   const missionResult = useMemo(() => {
+    if (detail?.resultText) return detail.resultText;
+    if (detail?.finalizerOutput) return detail.finalizerOutput;
     if (!detail?.events) return null;
-    const resultEvents = detail.events.filter((e) => e.type === "mission.result");
+    const resultEvents = detail.events
+      .filter((e) => e.type === "mission.result")
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     return resultEvents.length > 0 ? resultEvents[resultEvents.length - 1].message : null;
-  }, [detail?.events]);
+  }, [detail?.resultText, detail?.finalizerOutput, detail?.events]);
 
   // Contar erros para badge — usa o contador já materializado
   // em `MissionDetailState.errorsCount` para evitar divergência
@@ -625,9 +865,9 @@ export function ExecutionDetailPage() {
         {tab === "resultado" && (
           <MissionResultSection
             missionResult={missionResult}
+            runResultText={detail.resultText || detail.finalizerOutput}
             events={detail.events}
             activeRun={detail}
-            opencodeResponses={[]}
           />
         )}
 
@@ -692,46 +932,65 @@ function statusTone(status: string): string {
 
 function MissionResultSection({
   missionResult,
+  runResultText,
   events,
   activeRun,
-  opencodeResponses,
 }: {
   missionResult: string | null;
+  runResultText?: string;
   events: WorkflowEvent[];
   activeRun: WorkflowRunDetail;
-  opencodeResponses: Array<{ text: string }>;
 }) {
   const isError = activeRun.status === "failed";
-  const responseResults = opencodeResponses.filter((r) => r.text);
-  const latestResponse = responseResults.length > 0 ? responseResults[responseResults.length - 1] : null;
-  const resultText = missionResult || latestResponse?.text || null;
+  const isRunning =
+    activeRun.status === "running" ||
+    activeRun.status === "queued" ||
+    activeRun.status === "approved" ||
+    activeRun.status === "pending_approval";
+  // HOTFIX UI E2E — Fonte única canônica para a aba "Resultado":
+  //   1. `runResultText` (vindo de `WorkflowRun.resultText` /
+  //      `finalizerOutput` — propagado de `MissionRun.resultText`)
+  //   2. `missionResult` (evento `mission.result` consolidado)
+  // Nunca caímos em stream chunks do provider — esse era o
+  // bug que fazia a aba mostrar texto parcial ou logs.
+  const resultText = runResultText || missionResult || null;
+  const hasResult = typeof resultText === "string" && resultText.trim().length > 0;
 
   return (
     <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
       <div className="px-6 py-4 border-b border-border-subtle flex items-center gap-3">
         <div
           className={`w-8 h-8 rounded-lg border flex items-center justify-center ${
-            isError ? "bg-error-soft border-error/25" : "bg-success-soft border-success/25"
+            isError ? "bg-error-soft border-error/25" : isRunning ? "bg-accent-soft border-accent/25" : "bg-success-soft border-success/25"
           }`}
         >
-          <FileText size={15} className={isError ? "text-error" : "text-success"} />
+          <FileText size={15} className={isError ? "text-error" : isRunning ? "text-accent" : "text-success"} />
         </div>
         <div className="flex-1">
           <span className="text-[13px] font-semibold text-text-primary">
-            {isError ? "Erro da missão" : "Resultado da missão"}
+            {isError ? "Erro da missão" : isRunning ? "Aguardando conclusão da missão..." : "Resultado da missão"}
           </span>
         </div>
+        {hasResult && (
+          <span className="text-[11px] text-text-muted">
+            {resultText.length.toLocaleString("pt-BR")} caracteres
+          </span>
+        )}
       </div>
       <div className="p-5">
-        {resultText ? (
+        {hasResult ? (
           <div className="text-[13px] text-text-secondary max-h-[500px] overflow-auto">
             <MarkdownRenderer content={resultText} />
           </div>
         ) : isError ? (
           <div className="text-[13px] text-error">A execução falhou. Verifique a aba Erros para mais detalhes.</div>
+        ) : isRunning ? (
+          <div className="text-[13px] text-text-muted py-8 text-center">
+            Aguardando conclusão da missão...
+          </div>
         ) : (
           <div className="text-[13px] text-text-muted py-8 text-center">
-            Nenhum resultado registrado ainda. O resultado aparecerá quando a execução for concluída.
+            Nenhum resultado registrado. A missão foi concluída sem texto consolidado.
           </div>
         )}
       </div>

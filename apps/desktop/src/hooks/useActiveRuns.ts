@@ -1,6 +1,11 @@
 import { useState, useEffect } from "react";
 
-const ACTIVE_STATUSES = ["running", "approved", "pending_approval"];
+// HOTFIX UI E2E — Apenas execuções em estado verdadeiramente
+// ativo entram no painel lateral. Concluídas (completed),
+// falhadas (failed), canceladas (cancelled) e rejeitadas
+// (rejected) NÃO são ativas — elas vão para o histórico
+// (Execuções Recentes / aba Execuções).
+const ACTIVE_STATUSES = ["queued", "running", "approved", "pending_approval"];
 
 export function useActiveRuns(limit?: number) {
   const [runs, setRuns] = useState<any[]>([]);

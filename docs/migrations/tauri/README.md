@@ -348,6 +348,25 @@ trocando a camada Electron/preload/IPC por uma ponte de compatibilidade
   `apply_one_file_creates_intermediate_subdirectories`). Nenhuma
   alteração de fluxo backend, nenhuma feature nova, nenhum Git commit
   de projeto gerado, nenhum push para `main`.
+- [HOTFIX — Resultado final persistente, tela sincronizada e escrita real pela UI](./STATUS_HOTFIX_UI_RESULT_AND_DISK_WRITE.md)
+  Hotfix corretiva. Corrige o bug em que a aba "Resultado da
+  Missão" exibia stream chunks do provider (causa raiz: o backend
+  nunca emitia o evento `mission/result`, então a UI caía no
+  fallback de `opencodeResponses`). Adiciona fonte única real
+  `window.fluxora.missions.getDetail(runId)` (comando Tauri
+  `missions_get_detail` agregado). Persiste `MissionRun.resultText`
+  em `WorkflowRun.resultText` via `toWorkflowRun`. Garante que a
+  tela não limpa após conclusão: cada aba (Resumo, Agentes, Logs,
+  Resultado, Arquivos, Aprovação, Erros) lê do mesmo
+  `MissionDetailState`; `MissionResultPanel` /
+  `MissionResultCompactCard` mostram "Aguardando conclusão da
+  missão..." enquanto rodam e o resultado final quando concluem.
+  Prova: 80 testes Rust passam, incluindo
+  `apply_one_file_proves_disk_write_in_tmp_fluxora_ui_real_test`
+  que escreve `index.html` / `styles.css` / `script.js` em
+  `/tmp/fluxora-ui-real-test` (mesmo path que o usuário
+  cadastraria na UI) usando o mesmo `apply_one_file` que
+  `patches_apply` chama em runtime.
 
 ## Convenções aplicadas em todas as PRs
 

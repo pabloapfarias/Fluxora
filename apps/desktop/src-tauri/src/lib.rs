@@ -473,6 +473,14 @@ async fn missions_get(app: AppHandle, id: String) -> Result<Option<MissionRecord
 }
 
 #[tauri::command]
+async fn missions_get_detail(
+    app: AppHandle,
+    mission_id: String,
+) -> Result<Option<missions::MissionDetailRecord>, String> {
+    missions::missions_get_detail(app, mission_id)
+}
+
+#[tauri::command]
 async fn missions_create(
     app: AppHandle,
     payload: CreateMissionPayload,
@@ -1038,6 +1046,7 @@ pub fn run() {
             missions_ping,
             missions_list,
             missions_get,
+            missions_get_detail,
             missions_create,
             missions_run,
             missions_create_and_run,
